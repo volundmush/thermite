@@ -1,17 +1,19 @@
 #[macro_use]
 extern crate diesel;
 extern crate dotenv;
+extern crate tokio;
 
 use diesel::prelude::*;
 use diesel::pg::PgConnection;
 use dotenv::dotenv;
+use tokio::prelude::*;
 use std::env;
 use thermite::networking;
 use thermite::engine;
 use thermite::engine::ThermiteEngine;
 
-
-fn main() {
+#[tokio::main]
+async fn main() {
     dotenv().ok();
 
     let database_url = env::var("DATABASE_URL")

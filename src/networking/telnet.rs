@@ -1,5 +1,14 @@
-use crate::networking::{GameConnection, ConnectionHandler};
+extern crate tokio;
+extern crate async_trait;
+use async_trait::async_trait;
+use tokio::prelude::*;
+use futures::stream::StreamExt;
+use tokio::task::JoinHandle;
+use tokio::net;
+
+use crate::networking::{GameConnection, ConnectionHandler, ConnectionManager};
 use std::collections::HashMap;
+use std::thread::JoinHandle;
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -253,8 +262,9 @@ impl TelnetConnection {
     }
 }
 
+#[async_trait]
 impl GameConnection for TelnetConnection {
-    fn send_bytes(&mut self, data: &[u8], size: usize) {
+    async fn send_bytes(&mut self, data: &[u8], size: usize) {
         if self.mccp2 {
             // If mccp2 is on, we need to be sending a zlib compress9 stream.
         }
@@ -263,7 +273,7 @@ impl GameConnection for TelnetConnection {
         }
     }
 
-    fn receive_bytes(&mut self, data: &[u8], size: usize) {
+    async fn receive_bytes(&mut self, data: &[u8], size: usize) {
         if self.mccp3 {
             // if mccp3 is on, we are RECEIVING a zlib compress9 stream
         }
@@ -275,7 +285,7 @@ impl GameConnection for TelnetConnection {
         self.process_bytes(data, size);
     }
 
-    fn start(&mut self) -> Result<(), std::io::Error> {
+    async fn start(&mut self) -> Result<(), std::io::Error> {
         let supported_options = vec![tc::SGA, tc::NAWS, tc::MXP, tc::MSSP, tc::MCCP2,
                                      tc::MCCP3, tc::GMCP, tc::MSDP, tc::TTYPE];
         for op in supported_options {
@@ -284,17 +294,37 @@ impl GameConnection for TelnetConnection {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<(), std::io::Error> {
+    async fn stop(&mut self) -> Result<(), std::io::Error> {
 
         Ok(())
     }
 }
 
 pub struct TelnetConnectionHandler<'a> {
-    pub manager: &'a crate::networking::ConnectionManger<'a>,
-
+    pub manager: &'a ConnectionManager<'a>,
+    pub address: String,
+    pub port: u32,
+    pub listener: Option<net::TcpListener>,
+    pub task: Option<tokio::task::JoinHandle<_>>
 }
 
+#[async_trait]
 impl ConnectionHandler for TelnetConnectionHandler<'_> {
+    async fn start(&mut self) -> Result<(), std::io::Error> {
 
+
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> Result<(), std::io::Error> {
+        match self.task {
+            Some(handler) => {
+                handler.await.expect("Server stopped abnormally!");
+            }
+            None => {
+                println!("No server running!");
+            }
+        }
+        Ok(())
+    }
 }

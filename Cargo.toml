@@ -11,3 +11,5 @@ diesel = { version = "1.4.4", features = ["postgres", "uuid"] }
 dotenv = "0.15.0"
 uuid = "0.8.1"
 tokio = { version = "0.2", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1.31"
