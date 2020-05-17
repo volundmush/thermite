@@ -1,5 +1,3 @@
-use std::mem;
-use std::vec;
 use crate::engine;
 use std::collections::HashMap;
 
@@ -7,16 +5,27 @@ pub mod telnet;
 
 
 pub trait GameConnection {
-    fn process_input_bytes(&mut self, bytes: &[u8], length: usize) -> ();
-}
+    fn send_bytes(&mut self, data: &[u8], size: usize);
+    fn receive_bytes(&mut self, data: &[u8], size: usize);
 
-pub trait ConnectionHandler {
-    fn start(&self) -> Result<(), std::io::Error> {
+    fn start(&mut self) -> Result<(), std::io::Error> {
 
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), std::io::Error> {
+    fn stop(&mut self) -> Result<(), std::io::Error> {
+
+        Ok(())
+    }
+}
+
+pub trait ConnectionHandler {
+    fn start(&mut self) -> Result<(), std::io::Error> {
+
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), std::io::Error> {
 
         Ok(())
     }
@@ -28,13 +37,13 @@ pub struct ConnectionManger<'a> {
     pub engine: &'a engine::ThermiteEngine
 }
 
-impl ConnectionManger {
-    fn start(&self) -> Result<(), std::io::Error> {
+impl ConnectionManger<'_> {
+    fn start(&mut self) -> Result<(), std::io::Error> {
 
         Ok(())
     }
 
-    fn stop(&self) -> Result<(), std::io::Error> {
+    fn stop(&mut self) -> Result<(), std::io::Error> {
 
         Ok(())
     }

@@ -6,6 +6,10 @@ use diesel::prelude::*;
 use diesel::pg::PgConnection;
 use dotenv::dotenv;
 use std::env;
+use thermite::networking;
+use thermite::engine;
+use thermite::engine::ThermiteEngine;
+
 
 fn main() {
     dotenv().ok();
@@ -15,4 +19,9 @@ fn main() {
     PgConnection::establish(&database_url)
         .expect(&format!("Error connecting to {}", database_url));
     println!("Hello, world!");
+
+    let mut myengine = ThermiteEngine {};
+    let mut connection_manager = networking::ConnectionManger { connections: vec![],
+        handlers: Default::default(), engine: &myengine};
+    println!("It's amazing we got this far.");
 }
