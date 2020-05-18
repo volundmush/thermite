@@ -1,16 +1,9 @@
-extern crate async_trait;
-use async_trait::async_trait;
-use crate::engine;
 use std::collections::HashMap;
-use tokio::task::JoinHandle;
-use tokio::net;
-use futures::stream::StreamExt;
-use tokio::sync::mpsc::{Sender, Receiver, channel};
-use crate::networking::telnet::TelnetConnectionHandler;
+use actix::prelude::*;
 
 pub mod telnet;
 
-#[async_trait]
+
 pub trait GameProtocol {
     async fn send_bytes(&mut self, data: &[u8], size: usize);
     async fn receive_bytes(&mut self, data: &[u8], size: usize);
@@ -31,26 +24,22 @@ pub struct HostInfo {
     // probably more stuff...
 }
 
+
 pub struct GameConnection {
-    pub id: u32,
-    pub server_name: String,
+    pub uuid: uuid::Uuid,
     pub host: HostInfo,
-    pub task: tokio::task::JoinHandle<_>,
-    pub channel_to_manager: Sender<FromManagerToConnection>,
-    pub channel_from_manager: Receiver<FromConnectionToManager>,
 }
+
+
 
 pub struct GameServer {
     pub name: String,
     pub address: String,
     pub port: u32,
-    pub channel_to_server: Sender<FromManagerToServer>,
-    pub channel_from_server: Receiver<FromServerToManager>,
-    pub task: tokio::task::JoinHandler<_>,
 }
 
 
-impl GameServer {
+pub trait ConnectionHandler {
 
     async fn start(&mut self) -> Result<(), std::io::Error> {
 
@@ -71,9 +60,9 @@ impl GameServer {
 
         while running {
             tokio::select! {
-                _ = incoming.next(), if accept => {
+                Some(socket_res) = incoming.next(), if accept => {
                         // If there's a new connection AND we are being allowed to accept them right now...
-                        match _ {
+                        match socket_res {
                             Ok(socket) => {
                                 println!("Accepted connection from {:?}", socket.peer_addr());
 
@@ -85,7 +74,7 @@ impl GameServer {
                             }
                         }
                     }
-                _ = chan_from_manager.recv() => {
+                Some(msg) = chan_from_manager.recv() => {
                         // actually have no idea how this works... checking...
                 }
             }
@@ -112,14 +101,8 @@ impl GameServer {
 
         // Then I create the struct and return it?
         GameConnection {
-            id: 0,
-            server_name: name,
+            uuid: uuid::Uuid::new_v4(),
             host: info,
-            task,
-            channel_to_manager: (),
-            channel_to_connection: to_tx,
-            channel_from_connection: from_rx,
-            channel_from_manager: ()
         }
 
     }
@@ -127,7 +110,7 @@ impl GameServer {
 
 pub enum FromConnectionToManager {
     Connected(GameConnection),
-    Disconnected(u32)
+    Disconnected(uuid::Uuid)
 }
 
 pub enum FromManagerToConnection {
@@ -138,19 +121,28 @@ pub enum FromEngineToManager {
     Start,
     Stop,
     Shutdown,
+    Kick((uuid::Uuid, String))
 }
 
 pub enum FromManagerToEngine {
-    Disconnected(u32),
-    Connected(u32)
+    Disconnected(uuid::Uuid),
+    Connected(uuid::Uuid)
 }
 
 pub struct ConnectionManager {
-    pub last_id: u32,
-    pub connections: HashMap<u32, GameConnection>,
+    pub servers: HashMap<String, GameServer>,
+    pub connections: HashMap<uuid::Uuid, GameConnection>,
     pub enabled: bool,
     pub channel_from_engine: Receiver<FromEngineToManager>,
     pub channel_to_engine: Sender<FromManagerToEngine>
+}
+
+impl Actor for ConnectionManager {
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Context<Self>) {
+
+    }
 }
 
 impl ConnectionManager {
@@ -160,7 +152,8 @@ impl ConnectionManager {
         }
         let address: String = String::from("10.0.0.226");
         let port: u32 = 4200;
-        let mut telnet_server = self.start_server(address, port).await?;
+        let mut telnet_server = self.start_server(address, port, String::from("telnet"), TelnetConnectionHandler {}).await?;
+        self.servers.insert(String::from("telnet"), telnet_server);
         self.enabled = true;
         Ok(())
     }
@@ -173,7 +166,7 @@ impl ConnectionManager {
     }
 
     async fn server_loop(listener: net::TcpListener, chan_to_manager: Sender<FromServerToManager>, chan_from_manager: Receiver<FromManagerToServer>,
-                         name: String, mut protocol: impl GameProtocol) {
+                         name: String, mut handler: impl ConnectionHandler) {
         let mut incoming = listener.incoming();
 
         let mut running: bool = true;
@@ -207,29 +200,29 @@ impl ConnectionManager {
         }
     }
 
-    async fn start_server(&mut self, address: String, port: u32) -> Result<ServerHolder, std::io::Error> {
+    async fn connection_loop() {
+
+    }
+
+    async fn start_server(&mut self, address: String, port: u32, name: String, mut handler: impl ConnectionHandler) -> Result<ServerHolder, std::io::Error> {
         let addr: String = format!("{}:{}", address, port);
 
         // If not for this, I wouldn't need a Result. but binding can technically fail...
         let mut listener = net::TcpListener::bind(addr).await?;
 
-        let (from_tx, from_rx) = channel<FromServerToManager>(100);
-        let (to_tx, to_rx) = channel<FromManagerToServer>(100);
+        let (from_tx, from_rx) = tokio::sync::mspc::channel<FromServerToManager>(100);
+        let (to_tx, to_rx) = tokio::sync::mspc::channel<FromManagerToServer>(100);
 
         // Everything between here and line 130? I got no idea.
         let mut task = tokio::spawn(async move {
             // not sure if I actually NEED to await here...
-            ConnectionManager.server_loop(listener, to_rx, from_tx, name.clone(), protocol.clone()).await;
+            ConnectionManager.server_loop(listener, to_rx, from_tx, name.clone(), handler).await;
         });
 
         let mut server = GameServer {
             name,
             address,
             port,
-            channel_from_server: from_rx,
-            channel_to_server: to_tx,
-            task,
-            protocol: Box::new(protocol.clone())
         };
         Ok(server)
     }
