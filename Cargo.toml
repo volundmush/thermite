@@ -1,17 +1,6 @@
-[package]
-name = "thermite"
-version = "0.1.0"
-authors = ["Andrew Bastien <volundmush@gmail.com>"]
-edition = "2018"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-diesel = { version = "1.4.4", features = ["postgres", "uuid"] }
-dotenv = "0.15.0"
-uuid = "0.8.1"
-futures = "0.3"
-actix = "0.10.0-alpha.3"
-actix-web = "2.0.0"
-actix-codec = "0.2.0"
-actix-net = "0.2.6"
+members = [
+    "thermite_net",
+    "thermite"
+]

@@ -1,9 +1,16 @@
+extern crate async_trait;
+use async_trait::async_trait;
+use crate::engine;
 use std::collections::HashMap;
-use actix::prelude::*;
+use tokio::task::JoinHandle;
+use tokio::net;
+use futures::stream::StreamExt;
+use tokio::sync::mpsc::{Sender, Receiver, channel};
+use crate::networking::telnet::TelnetConnectionHandler;
 
-pub mod telnet;
 
 
+#[async_trait]
 pub trait GameProtocol {
     async fn send_bytes(&mut self, data: &[u8], size: usize);
     async fn receive_bytes(&mut self, data: &[u8], size: usize);
@@ -24,18 +31,22 @@ pub struct HostInfo {
     // probably more stuff...
 }
 
-
 pub struct GameConnection {
-    pub uuid: uuid::Uuid,
+    pub uuid: u32,
+    pub server_name: String,
     pub host: HostInfo,
+    pub task: tokio::task::JoinHandle<_>,
+    pub channel_to_manager: Sender<FromManagerToConnection>,
+    pub channel_from_manager: Receiver<FromConnectionToManager>,
 }
-
-
 
 pub struct GameServer {
     pub name: String,
     pub address: String,
     pub port: u32,
+    pub channel_to_server: Sender<FromManagerToServer>,
+    pub channel_from_server: Receiver<FromServerToManager>,
+    pub task: tokio::task::JoinHandler<_>,
 }
 
 
@@ -60,9 +71,9 @@ pub trait ConnectionHandler {
 
         while running {
             tokio::select! {
-                Some(socket_res) = incoming.next(), if accept => {
+                _ = incoming.next(), if accept => {
                         // If there's a new connection AND we are being allowed to accept them right now...
-                        match socket_res {
+                        match _ {
                             Ok(socket) => {
                                 println!("Accepted connection from {:?}", socket.peer_addr());
 
@@ -74,7 +85,7 @@ pub trait ConnectionHandler {
                             }
                         }
                     }
-                Some(msg) = chan_from_manager.recv() => {
+                _ = chan_from_manager.recv() => {
                         // actually have no idea how this works... checking...
                 }
             }
@@ -102,7 +113,13 @@ pub trait ConnectionHandler {
         // Then I create the struct and return it?
         GameConnection {
             uuid: uuid::Uuid::new_v4(),
+            server_name: name,
             host: info,
+            task,
+            channel_to_manager: (),
+            channel_to_connection: to_tx,
+            channel_from_connection: from_rx,
+            channel_from_manager: ()
         }
 
     }
@@ -135,14 +152,6 @@ pub struct ConnectionManager {
     pub enabled: bool,
     pub channel_from_engine: Receiver<FromEngineToManager>,
     pub channel_to_engine: Sender<FromManagerToEngine>
-}
-
-impl Actor for ConnectionManager {
-    type Context = Context<Self>;
-
-    fn started(&mut self, ctx: &mut Context<Self>) {
-
-    }
 }
 
 impl ConnectionManager {
@@ -223,6 +232,10 @@ impl ConnectionManager {
             name,
             address,
             port,
+            channel_from_server: from_rx,
+            channel_to_server: to_tx,
+            task,
+            protocol: Box::new(protocol.clone())
         };
         Ok(server)
     }
