@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 uuid = "0.8.1"
 tokio = {version = "0.2.21", features = ["full"]}
+tokio-rustls = "0.13.1"

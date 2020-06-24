@@ -4,12 +4,15 @@ use tokio::net::{TcpListener, TcpStream};
 use std::collections::HashMap;
 use uuid::Uuid;
 use std::net::SocketAddr;
+use tokio_rustls::rustls::{ Certificate, NoClientAuth, PrivateKey, ServerConfig };
+use tokio_rustls::rustls::internal::pemfile::{ certs, rsa_private_keys };
+use tokio_rustls::TlsAcceptor;
 
 pub enum TxToServer {
 
 }
 
-pub struct Server {
+pub struct ServerLink {
     name: String,
     address: String,
     port: u16,
@@ -21,10 +24,10 @@ pub enum TxToConnection {
 
 }
 
-pub struct Connection {
-    uuid: Uuid,
-    server: String,
-    tx: Sender<TxToConnection>
+pub struct ConnectionLink {
+    pub uuid: Uuid,
+    pub server: String,
+    pub tx: Sender<TxToConnection>
 }
 
 pub enum CloseReason {
@@ -36,29 +39,23 @@ pub enum CloseReason {
 pub struct ServerDef {
     pub name: String,
     pub address: String,
-    pub port: u16,
-    pub tls: bool
-}
-
-pub struct ConnectionDef {
-    pub name: String,
-    stream: TcpStream,
-    addr: SocketAddr
+    pub port: u16
 }
 
 pub enum TxToNetManager {
     CreateServer(ServerDef),
-    RegisterConnection(ConnectionDef),
+    RegisterConnection(ConnectionLink),
     CloseConnection((Uuid, CloseReason)),
 }
 
 pub struct NetworkManager {
-    servers: HashMap<String, Server>,
-    connections: HashMap<Uuid, Connection>,
+    servers: HashMap<String, ServerLink>,
+    connections: HashMap<Uuid, ConnectionLink>,
     rx: Receiver<TxToNetManager>,
     pub tx_master: Sender<TxToNetManager>,
     tls_ready: bool,
     running: bool,
+    tls_acceptor: Option<TlsAcceptor>
 }
 
 impl Default for NetworkManager {
@@ -71,14 +68,20 @@ impl Default for NetworkManager {
             rx,
             tx_master: tx,
             tls_ready: false,
-            running: false
+            running: false,
+            tls_acceptor: Default::default()
         }
     }
 }
 
 impl NetworkManager {
 
-    async fn create_server(&mut self, def: ServerDef) -> Result<(), &'static str> {
+    pub async fn setup_tls(&mut self) {
+        // Not sure what else this needs yet, but it will set tls_acceptor to have a TlsAcceptor.
+
+    }
+
+    pub async fn create_server(&mut self, def: ServerDef) -> Result<(), &'static str> {
         if self.servers.contains_key(&def.name) {
             return Err("A server already uses that name!");
         }
@@ -105,14 +108,32 @@ impl NetworkManager {
                 tokio::spawn(async move {
 
                     loop {
-                        println!("SERVER STARTING");
+
                         match listen.accept().await {
                             Ok((_socket, addr)) => {
+
+                                let mut uuid = uuid::Uuid::new_v4();
+
+                                let (mut tx_channel, mut rx_channel) = channel(100);
+
+                                let mut conn = Connection {
+                                    uuid: uuid.clone(),
+                                    transport: T::default(),
+                                    protocol: P::default(),
+                                    handler: H::default(),
+                                    stream: _socket,
+                                    address: addr.clone(),
+                                    tx: tx_new.clone(),
+                                    rx: rx_channel
+                                };
+
+
                                 tx_new.send(TxToNetManager::RegisterConnection(
-                                    ConnectionDef {
-                                        name: name.clone(),
-                                        addr,
-                                        stream: _socket
+                                    ConnectionLink {
+                                        uuid,
+                                        server: name.clone(),
+                                        address: addr,
+                                        tx: tx_channel,
                                     })).await;
                             }
                             Err(e) => {
@@ -159,4 +180,71 @@ impl NetworkManager {
             }
         };
     }
+}
+
+pub struct Connection<T: Transport, P: Protocol, H: Handler> {
+    uuid: Uuid,
+    transport: T,
+    protocol: P,
+    handler: H,
+    stream: TcpStream,
+    address: SocketAddr,
+    tx: Sender<TxToNetManager>,
+    rx: Receiver<TxToConnection>
+}
+
+impl Connection<T, P, H> {
+    async fn run(&mut self) {
+        // this will be run inside a Task...
+    }
+
+    async fn read_from_stream(&mut self) {
+        // this will get all data from stream, sending it to transport.incoming_bytes()
+    }
+}
+
+pub trait Transport {
+    async fn incoming_bytes(&mut self, &mut conn: Connection<T, P, H>){
+        // this should take some sort of
+    }
+}
+
+pub trait Protocol {
+
+}
+
+pub trait Handler {
+
+}
+
+pub struct TCPTransport {
+
+}
+
+impl Transport for TCPTransport {
+
+}
+
+pub struct TLSTransport {
+
+}
+
+impl Transport for TLSTransport {
+
+}
+
+pub struct TelnetProtocol {
+
+}
+
+impl Protocol for TelnetProtocol {
+
+}
+
+pub struct TelnetHandler {
+
+}
+
+impl Handler for TelnetHandler {
+
 }
