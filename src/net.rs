@@ -15,7 +15,7 @@ impl Message for MsgManagerToConnection {
 pub enum MsgConnectionToManager {
     Register(Connection),
     ConnectionLost(Uuid, String),
-    UserCommand(String)
+    UserCommand(Uuid, String)
 }
 
 impl Message for MsgConnectionToManager {
@@ -46,7 +46,19 @@ impl Handler<MsgConnectionToManager> for NetworkManager {
     type Result = ();
 
     fn handle(&mut self, msg: MsgConnectionToManager, ctx: &mut Context<Self>) -> Self::Result {
-
+        match msg {
+            MsgConnectionToManager::Register(conn) => {
+                println!("REGISTER CONNECTION: {}", conn.uuid);
+                self.register_connection(conn, ctx);
+            }
+            MsgConnectionToManager::UserCommand(uuid, comm) => {
+                self.connections.get_mut(&uuid).unwrap().addr.do_send(MsgManagerToConnection::Data(Bytes::from(format!("APP ECHO: {}", comm))));
+            }
+            MsgConnectionToManager::ConnectionLost(uuid, reason) => {
+                self.connections.remove(&uuid);
+                println!("LOST CONNECTION: {}", uuid);
+            }
+        }
     }
 }
 

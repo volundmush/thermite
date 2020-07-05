@@ -98,6 +98,11 @@ pub struct TelnetActor {
 impl Actor for TelnetActor {
     type Context = Context<Self>;
 
+    fn stopping(&mut self, ctx: &mut Context<Self>) -> Running {
+        self.manager.do_send(MsgConnectionToManager::ConnectionLost(self.uuid, String::from("dunno")));
+        Running::Stop
+    }
+
 }
 
 impl StreamHandler<Result<BytesMut, std::io::Error>> for TelnetActor {
@@ -115,8 +120,10 @@ impl StreamHandler<Result<BytesMut, std::io::Error>> for TelnetActor {
     }
 
     fn started(&mut self, ctx: &mut Context<Self>) {
-        let supported_options = vec![tc::SGA, tc::NAWS, tc::MXP, tc::MSSP, //tc::MCCP2,
-                                     tc::MCCP3, tc::GMCP, tc::MSDP, tc::TTYPE];
+        self.register_connection(ctx);
+        let supported_options = vec![tc::SGA, tc::NAWS, tc::MXP, tc::MSSP,
+                                     //tc::MCCP2, tc::MCCP3,
+                                     tc::GMCP, tc::MSDP, tc::TTYPE];
         for op in supported_options {
             self.negotiation_state.insert(op, TelnetNegotiationState::default());
             self.send_command(tc::WILL, op, ctx);
@@ -322,7 +329,7 @@ impl TelnetActor {
                 self.send_bytes(buffer, ctx);
                 self.mccp2 = true;
             }
-            _ => {
+            other => {
 
             }
         }
@@ -341,12 +348,10 @@ impl TelnetActor {
     }
 
     fn process_line(&mut self, ctx: &mut Context<Self>) {
-        let mut buffer = BytesMut::with_capacity(self.data_buffer.len());
-        buffer.extend(b"ECHO: ");
-        buffer.extend(self.data_buffer.as_ref());
-        buffer.extend(b"\r\n");
-        self.send_bytes(buffer, ctx);
+        let mut buffer = self.data_buffer.clone();
         self.data_buffer.clear();
+        let command = String::from_utf8_lossy(buffer.bytes().clone());
+        self.manager.do_send(MsgConnectionToManager::UserCommand(self.uuid, command.to_string()));
     }
 
     fn process_sub_buffer(&mut self, byte: u8, ctx: &mut Context<Self>) {
@@ -386,7 +391,14 @@ impl Handler<MsgManagerToConnection> for TelnetActor {
     type Result = ();
 
     fn handle(&mut self, msg: MsgManagerToConnection, ctx: &mut Context<Self>) -> Self::Result {
-        unimplemented!()
+        match msg {
+            MsgManagerToConnection::Data(bytes) => {
+                self.send_bytes(bytes, ctx);
+            }
+            _ => {
+
+            }
+        }
     }
 }
 
