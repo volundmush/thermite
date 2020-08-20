@@ -1,22 +1,17 @@
+use tokio::prelude::*;
 use std::collections::HashMap;
 use std::vec::Vec;
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use actix_web_actors::ws;
-use actix::prelude::*;
-use actix::{Actor, Addr, StreamHandler};
-use actix_web_actors::ws::{Message, ProtocolError};
 use std::time::{Instant};
 use bytes::{Bytes, Buf, BytesMut, BufMut};
-use uuid::Uuid;
 use crate::net::{MsgManagerToConnection, MsgConnectionToManager, NetworkManager, Connection, Protocol};
 use std::io::Write;
-use std::net::{TcpListener as StdListener, SocketAddr};
-use actix::io::{Writer, SinkWrite, WriteHandler};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::io::Result as TokIoResult;
-use tokio_util::codec::{Framed, FramedRead, FramedWrite, BytesCodec};
+use std::net::{SocketAddr};
+use tokio::task::JoinHandle;
+use tokio::sync::mpsc;
+use tokio::net::{TcpStream, TcpListener};
+use tokio::net::tcp::{ReadHalf, WriteHalf, OwnedReadHalf, OwnedWriteHalf};
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -70,89 +65,264 @@ pub enum TelnetState {
 }
 
 #[derive(Default)]
-pub struct TelnetNegotiationState {
-    sent_start: u8,
-    sent_stop: u8,
-    received_start: u8,
-    received_stop: u8,
-    enabled: bool,
+pub struct TelnetOptionPerspective {
+    pub enabled: bool,
+    pub negotiating: bool
 }
 
-pub struct TelnetActor {
-    manager: Addr<NetworkManager>,
-    conn_data: SocketAddr,
-    negotiation_state: HashMap<u8, TelnetNegotiationState>,
-    conn_state: TelnetState,
-    handshake_count: u8,
-    data_buffer: BytesMut,
-    last_data_byte: u8,
-    sub_buffer: BytesMut,
-    mccp2: bool,
-    mccp3: bool,
-    heartbeat: Instant,
-    uuid: Uuid,
-    sink: SinkWrite<Bytes, FramedWrite<OwnedWriteHalf, BytesCodec>>
+#[derive(Default)]
+pub struct TelnetOptionState {
+    pub us: TelnetOptionPerspective,
+    pub them: TelnetOptionPerspective,
 }
 
-
-impl Actor for TelnetActor {
-    type Context = Context<Self>;
-
-    fn stopping(&mut self, ctx: &mut Context<Self>) -> Running {
-        self.manager.do_send(MsgConnectionToManager::ConnectionLost(self.uuid, String::from("dunno")));
-        Running::Stop
-    }
-
+pub struct TelnetConfig {
+    pub client_name: String,
+    pub client_version: String,
+    pub encoding: String,
+    pub utf8: bool,
+    pub ansi: bool,
+    pub xterm256: bool,
+    pub width: usize,
+    pub height: usize,
+    pub gmcp: bool,
+    pub msdp: bool,
+    pub mxp: bool,
+    pub mccp2: bool,
+    pub mccp3: bool,
+    pub ttype: bool,
+    pub naws: bool,
+    pub sga: bool,
+    pub linemode: bool,
+    pub force_endline: bool,
+    pub oob: bool,
+    pub tls: bool
 }
 
-impl StreamHandler<Result<BytesMut, std::io::Error>> for TelnetActor {
-    fn handle(&mut self, item: Result<BytesMut, std::io::Error>, ctx: &mut Context<Self>) {
-        // Retrieve the message or kill this if we have a problem...
-        match item {
-            Err(_) => {
-                ctx.stop();
-                return;
-            }
-            Ok(msg) => {
-                self.process_incoming_bytes(msg, ctx);
-            },
-        }
-    }
-
-    fn started(&mut self, ctx: &mut Context<Self>) {
-        self.register_connection(ctx);
-        let supported_options = vec![tc::SGA, tc::NAWS, tc::MXP, tc::MSSP,
-                                     //tc::MCCP2, tc::MCCP3,
-                                     tc::GMCP, tc::MSDP, tc::TTYPE];
-        for op in supported_options {
-            self.negotiation_state.insert(op, TelnetNegotiationState::default());
-            self.send_command(tc::WILL, op, ctx);
-        }
-    }
-}
-
-impl TelnetActor {
-    
-    pub fn new(manager: Addr<NetworkManager>, conn_data: SocketAddr, sink: SinkWrite<Bytes, FramedWrite<OwnedWriteHalf, BytesCodec>>) -> Self {
-        Self {
-            manager,
-            conn_data,
-            negotiation_state: Default::default(),
-            conn_state: TelnetState::Data,
-            handshake_count: 0,
-            data_buffer: BytesMut::with_capacity(256),
-            last_data_byte: 0,
-            sub_buffer: BytesMut::with_capacity(256),
+impl Default for TelnetConfig {
+    fn default() -> Self {
+        TelnetConfig {
+            client_name: String::from("UNKNOWN"),
+            client_version: String::from("UNKNOWN"),
+            encoding: String::from("ascii"),
+            utf8: false,
+            ansi: false,
+            xterm256: false,
+            width: 78,
+            height: 24,
+            gmcp: false,
+            msdp: false,
+            mxp: false,
             mccp2: false,
             mccp3: false,
-            heartbeat: Instant::now(),
-            uuid: Uuid::new_v4(),
-            sink: sink
+            ttype: false,
+            naws: false,
+            sga: false,
+            linemode: false,
+            force_endline: false,
+            oob: false,
+            tls: false
+        }
+    }
+}
+
+pub enum Msg2TelnetReader {
+    Kill,
+    Compress(bool)
+}
+
+pub struct TelnetReader {
+    pub reader: OwnedReadHalf,
+    pub tx_protocol: mpsc::Sender<Msg2TelnetProtocol>,
+    pub rx_reader: mpsc::Receiver<Msg2TelnetReader>,
+    pub compress: bool
+}
+
+impl TelnetReader {
+    pub async fn run(&mut self) {
+        let mut buffer = BytesMut::with_capacity(1024);
+        let mut length: usize = 0;
+
+        loop {
+            tokio::select! {
+                length = self.reader.read(buffer.as_mut()) => {
+                    let mut data = buffer.clone();
+                    data.resize(length);
+                    self.tx_protocol.send(Msg2TelnetProtocol::ReceiveBytes(data.freeze()));
+                },
+                Some(msg) = self.rx_reader.recv() => {
+                    match msg {
+                        Msg2TelnetReader::Kill => {
+                            break;
+                        },
+                        Msg2TelnetReader::Compress(state) => {
+                            self.compress = state;
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub enum Msg2TelnetWriter {
+    Kill,
+    Compress(bool),
+    Data(Bytes)
+}
+
+pub struct TelnetWriter {
+    pub writer: OwnedWriteHalf,
+    pub tx_protocol: mpsc::Sender<Msg2TelnetProtocol>,
+    pub rx_writer: mpsc::Receiver<Msg2TelnetWriter>,
+    pub compress: bool
+}
+
+impl TelnetWriter {
+    pub async fn run(&mut self) {
+        loop {
+            if let Some(msg) = self.rx_writer.recv().await {
+                match msg {
+                    Msg2TelnetWriter::Kill => {
+                        self.writer.poll_shutdown();
+                        break;
+                    },
+                    Msg2TelnetWriter::Compress(state) => {
+                        self.compress = state;
+                    },
+                    Msg2TelnetWriter::Data(payload) => {
+                        match self.writer.write_all(payload.as_ref()).await {
+                            Ok(_) => {},
+                            _ => {
+                                // oops something went wrong here!
+                                eprintln!("COULD NOT WRITE EVERYTHING?! NOW WHAT?!");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub enum Msg2TelnetProtocol {
+    ReaderDisconnected(Some<String>),
+    WriterDisconnected(Some<String>),
+    ServerDisconnected(Some<String>),
+    ReceiveBytes(Bytes),
+}
+
+pub struct TelnetProtocol {
+    pub addr: SocketAddr,
+    pub op_state: HashMap<u8, TelnetOptionState>,
+    pub conn_state: TelnetState,
+    pub handshake_count: u8,
+    pub enabled: bool,
+    pub app_buffer: BytesMut,
+    pub last_data_byte: u8,
+    pub sub_buffer: BytesMut,
+    pub config: TelnetConfig,
+    pub conn_id: String,
+    pub reader_handle: JoinHandle<_>,
+    pub writer_handle: JoinHandle<_>,
+    pub tx_protocol: mpsc::Sender<Msg2TelnetProtocol>,
+    pub rx_protocol: mpsc::Receiver<Msg2TelnetProtocol>,
+    pub tx_reader: mpsc::Sender<Msg2Reader>,
+    pub tx_writer: mpsc::Sender<Msg2Writer>,
+    pub tx_server: mpsc::Sender<Msg2TelnetServer>
+}
+
+impl TelnetProtocol {
+    pub fn new(conn_id: String, conn: TcpStream, tx_server: mpsc::Sender<Msg2TelnetServer>) -> Self {
+
+        let sock_addr = conn.peer_addr().unwrap();
+
+        let (read, write) = conn.into_split();
+
+        let (tx_protocol, rx_protocol) = mpsc::channel(50);
+        let (tx_reader, rx_reader) = mpsc::channel(50);
+        let (tx_writer, rx_writer) = mpsc::channel(50);
+
+        let mut reader = TelnetReader {
+            reader: read,
+            tx_protocol: tx_protocol.clone(),
+            rx_reader,
+            compress: false,
+        };
+
+        let mut writer = TelnetWriter {
+            writer: write,
+            tx_protocol: tx_protocol.clone(),
+            rx_writer,
+            compress: false
+        };
+
+        let read_handle = tokio::spawn(async move {
+            reader.run();
+        });
+
+        let write_handle = tokio::spawn(async move {
+            writer.run();
+        });
+
+        TelnetProtocol {
+            conn_id,
+            reader_handle: read_handle,
+            writer_handle: write_handle,
+            addr: sock_addr,
+            tx_server,
+            conn_state: TelnetState::Data,
+            op_state: HashMap::default(),
+            handshake_count: 10,
+            enabled: false,
+            app_buffer: BytesMut::default(),
+            last_data_byte: 0,
+            sub_buffer: BytesMut::default(),
+            config: TelnetConfig::default(),
+            tx_protocol,
+            rx_protocol,
+            tx_reader,
+            tx_writer,
+        }
+    }
+}
+
+impl TelnetProtocol {
+    pub async fn run(&mut self) {
+        loop {
+            if let Some(msg) = self.rx_protocol.recv().await => {
+                match msg {
+                    Msg2TelnetProtocol::ServerDisconnected(reason) => {
+                        if let Some(display) = reason {
+                            // Do something with the reason I guess?
+                        };
+                        self.tx_reader.send(Msg2TelnetReader::Kill);
+                        self.tx_writer.send(Msg2TelnetWriter::Kill);
+                        break;
+                    },
+                    Msg2TelnetProtocol::ReaderDisconnected(reason) => {
+                        if let Some(display) = reason {
+                            // Do something with the reason I guess?
+                        };
+                        self.tx_writer.send(Msg2TelnetWriter::Kill);
+                        break;
+                    },
+                    Msg2TelnetProtocol::WriterDisconnected(reason) => {
+                        if let Some(display) = reason {
+                            // Do something with the reason I guess?
+                        };
+                        self.tx_reader.send(Msg2TelnetReader::Kill);
+                        break;
+                    },
+                    Msg2TelnetProtocol::ReceiveBytes(data) => {
+                        self.receive_bytes(data);
+                    }
+                }
+            }
         }
     }
 
-
-    fn process_incoming_bytes(&mut self, data: impl Buf, ctx: &mut Context<Self>) {
+    fn receive_bytes(&mut self, data: impl Buf) {
 
         for byte in data.bytes() {
             let b = byte.clone();
@@ -237,6 +407,38 @@ impl TelnetActor {
             }
         }
     }
+
+}
+
+
+pub enum Msg2TelnetServer {
+    Disconnected((String, Some<String>)),
+
+}
+
+
+pub struct TelnetListener {
+
+}
+
+
+pub struct TelnetConnection {
+    addr: SocketAddr,
+    conn_id: String,
+    handle: JoinHandle<_>,
+    tx_protocol: mpsc::Sender<Msg2TelnetProtocol>,
+}
+
+
+pub struct TelnetServer {
+    connections: HashMap<String, TelnetConnection>,
+    tx_server: mspc::Sender<Msg2TelnetServer>,
+    rx_server: mspc::Receiver<Msg2TelnetServer>,
+    tx_listener: mspc::Sender<Msg2TelnetListener>
+}
+
+
+impl TelnetActor {
 
     // This is called when we get an IAC DO/DONT/WILL/WONT <option>
     fn process_iac_command(&mut self, command: u8, op: u8, ctx: &mut Context<Self>) {
@@ -374,66 +576,6 @@ impl TelnetActor {
         }
         else {
             self.sink.write(data.to_bytes());
-        }
-    }
-
-    fn register_connection(&mut self, ctx: &mut Context<Self>) {
-        let conn = Connection {
-            uuid: self.uuid.clone(),
-            protocol: Protocol::Telnet,
-            addr: ctx.address().recipient(),
-        };
-        self.manager.do_send(MsgConnectionToManager::Register(conn));
-    }
-}
-
-impl Handler<MsgManagerToConnection> for TelnetActor {
-    type Result = ();
-
-    fn handle(&mut self, msg: MsgManagerToConnection, ctx: &mut Context<Self>) -> Self::Result {
-        match msg {
-            MsgManagerToConnection::Data(bytes) => {
-                self.send_bytes(bytes, ctx);
-            }
-            _ => {
-
-            }
-        }
-    }
-}
-
-impl WriteHandler<std::io::Error> for TelnetActor {
-
-}
-
-pub struct TcpServer {
-    pub connections: Vec<Addr<TelnetActor>>,
-    pub manager: Addr<NetworkManager>
-}
-
-impl Actor for TcpServer {
-    type Context = Context<Self>;
-}
-
-impl StreamHandler<TokIoResult<TcpStream>> for TcpServer {
-
-    fn handle(&mut self, msg: TokIoResult<TcpStream>, ctx: &mut Context<Self>) {
-        match msg {
-            Ok(stream) => {
-                let telnet = TelnetActor::create(|nctx| {
-                    let sock = stream.peer_addr().unwrap();
-                    let (mut reader, mut writer) = stream.into_split();
-                    let rdr = FramedRead::new(reader, BytesCodec::new());
-                    let wrt = FramedWrite::new(writer, BytesCodec::new());
-                    let snkwrite = SinkWrite::new(wrt, nctx);
-                    nctx.add_stream(rdr);
-                    TelnetActor::new(self.manager.clone(), sock, snkwrite)
-                });
-                self.connections.push(telnet);
-            }
-            Err(e) => {
-                eprintln!("ERROR ACCEPTING CONNECTION: {:?}", e);
-            }
         }
     }
 }

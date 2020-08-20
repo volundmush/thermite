@@ -9,7 +9,12 @@ pub struct EntityLocation {
     // its coordinates as a Vector3.
     pub location: usize,
     // Probably want to use something other than a usize here... not sure yet.
-    pub coordinates: Vector3<usize>
+    // The meaning of the 'coordinates' will depend on the Entity's kind.
+    // for a SpaceSector, this would be where all of the things inside it are.
+    // For a Character, perhaps X is the inventory category (one of which would be for equipment),
+    // y for equipment is the equipment slot, and z is the layer. Normal Rooms probably ignore it
+    // Altogether, or use logic similarly to Characters.
+    pub coordinates: Vector3<usize>,
 }
 
 #[derive(Clone)]
@@ -141,7 +146,8 @@ pub struct Kind {
 
 pub struct EntityManager {
     // Vector of all Entities in system. Note that this is always accessed by index and some elements
-    // are Garbage entities ready to be re-created.
+    // are Garbage entities ready to be re-created. This leads to blazing fast lookup speeds by
+    // Entity ID.
     pub entities: Vec<Entity>,
 
     // Namespaces are used to index uniquely-named entities such as 'PLAYERS' or 'GUILDS'.
@@ -154,7 +160,7 @@ pub struct EntityManager {
 
 impl EntityManager {
 
-    // Will return the ID it's given if it is aavailable for creation. If it is not available, will
+    // Will return the ID it's given if it is available for creation. If it is not available, will
     // return something else that's usable.
     fn available_id(&self, id_choice: Option<usize>) -> usize {
         match id_choice {
@@ -183,9 +189,10 @@ impl EntityManager {
     }
     
     // Method to do the actual low-level construction of an Entity
-    // Returns the ID of the created entity.
-    fn create_entity(&mut self, name: String, namespace: Option<String>, kind: String, location: Option<EntityLocation>,
-    destination: Option<EntityLocation>, home: Option<EntityLocation>, owner: Option<usize>, id: usize) -> usize {
+    // This cannot fail. All validation should be done in other functions.
+    fn create_entity(&mut self, id: usize, name: String, namespace: Option<String>, kind: String,
+                     location: Option<EntityLocation>, destination: Option<EntityLocation>,
+                     home: Option<EntityLocation>, owner: Option<usize>) {
 
         // fn available_id must already have been used to validate/generate an ID.
 
@@ -205,6 +212,7 @@ impl EntityManager {
             let mut old_ent = self.entities.get_mut(id).unwrap();
             new_ent.generation = old_ent.next_gen();
             self.entities[id] = new_ent;
+            self.garbage.remove(&id);
         }
 
         else {
@@ -246,7 +254,6 @@ impl EntityManager {
         if let Some(kind) = self.kinds.get_mut(&kind) {
             kind.entities.insert(id);
         }
-        id
     }
     
     // Performs actual deletion of an Entity. This clears its properties, wipes cache, and readies
@@ -293,7 +300,7 @@ impl EntityManager {
             }
         }
 
-        ent.trash();
+        self.entities.get_mut(id).unwrap().trash();
         self.garbage.insert(id);
     }
 }

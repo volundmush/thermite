@@ -1,7 +1,17 @@
-use actix::prelude::*;
+use tokio::prelude::*;
 use bytes::Bytes;
 use std::collections::HashMap;
-use uuid::Uuid;
+use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
+use tokio::sync::mpsc;
+use std::net::{SocketAddr};
+
+
+
+pub struct TelnetServer {
+    connections:
+}
+
 
 pub enum MsgManagerToConnection {
     Data(Bytes),

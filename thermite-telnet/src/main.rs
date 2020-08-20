@@ -1,14 +1,10 @@
-//use actix_rt::{main};
-use actix::prelude::*;
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
-use actix_web_actors::ws;
-use thermite::net::{NetworkManager};
-use thermite::telnet::{TelnetActor, TcpServer};
-use actix_web::client::ClientBuilder;
-use tokio::net::TcpListener;
-use std::net::TcpListener as StdListener;
+use tokio::prelude::*;
+use crate::net::{NetworkManager};
 
-#[actix_rt::main]
+use tokio::net::TcpListener;
+
+
+#[tokio::main]
 async fn main() -> Result<(), Error> {
 
     let mut net_man = NetworkManager::default().start();
