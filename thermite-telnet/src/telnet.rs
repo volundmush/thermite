@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use tokio::sync::mpsc;
 use tokio::net::{TcpStream, TcpListener};
 use tokio::net::tcp::{ReadHalf, WriteHalf, OwnedReadHalf, OwnedWriteHalf};
+use std::fmt::Write;
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -275,9 +276,9 @@ impl TelnetProtocol {
             op_state: HashMap::default(),
             handshake_count: 10,
             enabled: false,
-            app_buffer: BytesMut::default(),
+            app_buffer: BytesMut::with_capacity(1024),
             last_data_byte: 0,
-            sub_buffer: BytesMut::default(),
+            sub_buffer: BytesMut::with_capacity(1024),
             config: TelnetConfig::default(),
             tx_protocol,
             rx_protocol,
@@ -333,7 +334,7 @@ impl TelnetProtocol {
                     match b {
                         tc::IAC => self.conn_state = TelnetState::Escaped,
                         tc::CR => self.conn_state = TelnetState::NewLine,
-                        _ => { self.process_data_byte(b, ctx);}
+                        _ => { self.app_buffer.put(b)}
                     }
                 }
 
@@ -355,9 +356,12 @@ impl TelnetProtocol {
                         tc::IAC => {
                             // receiving another IAC puts is back in data mode, and escapes the IAC
                             self.conn_state = TelnetState::Data;
-                            self.process_data_byte(b, ctx);
+                            self.app_buffer.put(b);
                         }
-                        tc::SB => self.conn_state = TelnetState::Subnegotiation,
+                        tc::SB => {
+                            self.conn_state = TelnetState::Subnegotiation;
+                            self.sub_buffer.clear();
+                        },
                         tc::WILL | tc::WONT | tc::DO | tc::DONT =>
                             self.conn_state = TelnetState::InCommand(b),
                         _ => {
