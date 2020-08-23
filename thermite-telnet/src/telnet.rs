@@ -1,23 +1,43 @@
-use tokio::prelude::*;
-use std::collections::HashMap;
-use std::iter;
-use std::io;
-use std::vec::Vec;
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
-use bytes::{BytesMut, Buf, BufMut};
-use std::net::{SocketAddr};
-use tokio::task::JoinHandle;
-use tokio::sync::mpsc;
-use tokio_util::codec::{Encoder, Decoder, Framed};
-use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{TlsAcceptor};
-use tokio_rustls::server::TlsStream;
-use rand::{Rng, thread_rng};
-use rand::distributions::Alphanumeric;
-use futures::sink::{Sink, SinkExt};
-use futures::stream::{Stream, StreamExt};
+use tokio::{
+    prelude::*,
+    task::JoinHandle,
+    sync::mpsc,
+    net::{TcpListener, TcpStream}
+};
 
+use tokio_util::codec::{Encoder, Decoder, Framed};
+
+use tokio_rustls::{
+    TlsAcceptor,
+    server::TlsStream
+};
+
+use std::{
+    collections::HashMap,
+    iter,
+    io,
+    vec::Vec,
+    net::SocketAddr
+};
+
+use flate2::{
+    Compression,
+    write::{ZlibEncoder, ZlibDecoder}
+};
+
+use bytes::{BytesMut, Buf, BufMut};
+
+use rand::{
+    Rng,
+    thread_rng,
+    distributions::Alphanumeric
+};
+
+use futures::{
+    sink::{Sink, SinkExt},
+    stream::{Stream, StreamExt}
+};
+use std::convert::TryInto;
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -506,6 +526,7 @@ pub struct TelnetProtocol {
     pub conn_id: String,
     pub handshakes_left: u8,
     pub ttype_handshakes: u8,
+    pub ttype_first: Option<Vec<u8>>,
     pub reader_handle: JoinHandle<()>,
     pub writer_handle: JoinHandle<()>,
     pub tx_protocol: mpsc::Sender<Msg2Protocol>,
@@ -543,7 +564,7 @@ impl TelnetProtocol {
             reader_handle: read_handle,
             writer_handle: write_handle,
             tx_server,
-            op_state: HashMap::default(),
+            op_state: Default::default(),
             enabled: false,
             config: TelnetConfig::default(),
             tx_protocol,
@@ -552,6 +573,7 @@ impl TelnetProtocol {
             tx_writer,
             handshakes_left: 0,
             ttype_handshakes: 0,
+            ttype_first: None
         };
 
         // Create Handlers for options...
@@ -737,7 +759,7 @@ impl TelnetProtocol {
             tc::NAWS => self.config.naws = true,
             tc::TTYPE => {
                 self.config.ttype = true;
-                self.send_empty_sub(tc::TTYPE).await;
+                self.request_ttype().await;
             },
             tc::LINEMODE => self.config.linemode = true,
             _ => {
@@ -814,9 +836,156 @@ impl TelnetProtocol {
         self.send_sub_data(op, data).await;
     }
 
+    async fn request_ttype(&mut self) {
+        let mut data: Vec<u8> = vec![1];
+        self.send_sub_data(tc::TTYPE, data);
+    }
+
     async fn receive_ttype(&mut self, data: Vec<u8>) {
+        if self.ttype_handshakes > 2 {
+            // No reason to listen to TTYPE anymore.
+            return;
+        }
+        if !data.len() > 1 {
+            // if there is no data, ignore this.
+            return;
+        }
+        // If the first byte of data is not u8 == 1, this is not valid.
+        let (is, info) = data.split_at(1);
+        if is[0] != 1 {
+            return;
+        }
+        let mut incoming = String::from("");
+        if let Ok(conv) = String::from_utf8(Vec::from(info)) {
+            incoming = conv;
+        }
+        else {
+            // We could not parse this to a string. gonna ignore it.
+            return;
+        }
+
+        if !incoming.len() > 0 {
+            // Not sure how we ended up an empty string, but not gonna allow it.
+            return;
+        }
+
+        incoming = incoming.to_uppercase();
+
+        match self.ttype_handshakes {
+            0 => {
+                self.ttype_first = Some(data.clone());
+                self.receive_ttype_0(incoming).await;
+            },
+            1 => {
+                let t_first = self.ttype_first.clone();
+                if let Some(first) = t_first {
+                    if first.eq(&data) {
+                        // This client does not support advanced ttype. Ignore further
+                        // calls to TTYPE and consider this complete.
+                        self.ttype_handshakes = 2;
+                        self.receive_ttype_basic().await;
+                    } else {
+                        self.receive_ttype_1(incoming);
+                    }
+                }
+            },
+            2 => {
+                self.receive_ttype_2(incoming);
+            }
+            _ => {}
+        }
+        self.ttype_handshakes = self.ttype_handshakes + 1;
+        if self.ttype_handshakes < 2 {
+            self.request_ttype().await;
+        }
+    }
+
+    async fn receive_ttype_0(&mut self, data: String) {
+        // The first TTYPE receives the name of the client.
+        // version might also be in here as a second word.
+        if data.contains(" ") {
+            let results: Vec<&str> = data.splitn(1, " ").collect();
+            self.config.client_name = String::from(results[0]);
+            self.config.client_version = String::from(results[1]);
+        } else {
+            self.config.client_name = data;
+        }
+
+        // Now that the name and version (may be UNKNOWN) are set... we can deduce capabilities.
+        let mut extra_check = false;
+        match self.config.client_name.as_str() {
+            "ATLANTIS" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "CMUD" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "KILDCLIENT" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "MUDLET" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "MUSHCLIENT" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "PUTTY" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "BEIP" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "POTATO" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            },
+            "TINYFUGUE" => {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            }
+            _ => {
+                extra_check = true;
+            }
+        }
+        if extra_check {
+            if self.config.client_name.starts_with("XTERM") || self.config.client_name.ends_with("-256COLOR") {
+                self.config.xterm256 = true;
+                self.config.ansi = true;
+            }
+        }
+    }
+
+    async fn receive_ttype_1(&mut self, data: String) {
+        if data.starts_with("XTERM") || data.ends_with("-256COLOR") {
+            self.config.xterm256 = true;
+            self.config.ansi = true;
+        }
+    }
+
+    async fn receive_ttype_2(&mut self, data: String) {
+        if !data.starts_with("MTTS ") {
+            return;
+        }
+        let results: Vec<&str> = data.splitn(1, " ").collect();
+        let value = String::from(results[1]);
+        let mtts: usize = value.parse().unwrap_or(0);
+        if mtts > 0 {
+            return;
+        }
 
     }
+
+    async fn receive_ttype_basic(&mut self) {
+        // Not sure if anything needs to happen here yet...
+    }
+
 
     async fn receive_naws(&mut self, data: Vec<u8>) {
         if data.len() != 4 {
@@ -824,8 +993,8 @@ impl TelnetProtocol {
             return;
         }
         let (width, height) = data.split_at(2);
-        let width = u16::from_le_bytes(*width[2]);
-        let height = u16::from_le_bytes(*height[2]);
+        let width = u16::from_le_bytes(width.try_into().unwrap());
+        let height = u16::from_le_bytes(height.try_into().unwrap());
         self.config.width = width;
         self.config.height = height;
     }
