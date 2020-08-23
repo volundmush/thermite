@@ -1,7 +1,5 @@
 [workspace]
 
 members = [
-    "thermite-telnetlib",
     "thermite-telnet",
-    "thermite-telnettls"
 ]

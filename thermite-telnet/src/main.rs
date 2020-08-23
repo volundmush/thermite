@@ -1,31 +1,16 @@
 use tokio::prelude::*;
-use crate::net::{NetworkManager};
-
+use thermite_telnet::telnet::{TelnetServer};
 use tokio::net::TcpListener;
 
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() {
 
-    let mut net_man = NetworkManager::default().start();
-    
-    let mut listener = StdListener::bind("0.0.0.0:7999").unwrap();
-    let mut listener = TcpListener::from_std(listener).unwrap();
-    
-    let mut telnet_srv = TcpServer::create(|ctx| {
-        ctx.add_stream(listener);
-        TcpServer {
-            connections: Default::default(),
-            manager: net_man.clone()
-        }
-    });
+    let mut listener = TcpListener::bind("0.0.0.0:7999").await.unwrap();
+    let mut srv = TelnetServer::new();
 
-    HttpServer::new(move || {
-        App::new()
-            .data(net_man.clone())
-    })
-        .bind("0.0.0.0:8000")?
-        .run()
-        .await;
-    Ok(())
+    srv.listen(String::from("telnet"), listener, None);
+
+    srv.run().await;
+
 }
