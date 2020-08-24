@@ -1,6 +1,7 @@
 use diesel::{
     prelude::*,
-    r2d2::Pool
+    pg::PgConnection,
+    r2d2::{ConnectionManager, Pool}
 };
 use crate::schema;
 use tokio_diesel::*;
@@ -42,6 +43,10 @@ pub struct ReqBanUser {
     pub ban_until: NaiveDateTime
 }
 
+pub struct ReqUnbanUser {
+    pub user_id: i32
+}
+
 pub struct ReqDisableUser {
     pub user_id: i32
 }
@@ -73,7 +78,7 @@ pub struct ReqWipeStorage {
     pub category: String
 }
 
-pub enum Msg2UserManager {
+pub enum Msg2DbManager {
     CreateUser(ReqUserCreate),
     AddEmail(ReqAddEmail),
     RemEmail(ReqRemEmail),
@@ -84,49 +89,68 @@ pub enum Msg2UserManager {
     SetStorage(ReqSetStorage),
     DelStorage(ReqDelStorage),
     WipeStorage(ReqWipeStorage),
+    BanUser(ReqBanUser),
+    UnbanUser(ReqUnbanUser),
     Kill
 }
 
-pub struct UserManager {
-    rx_usermanager: Receiver<Msg2UserManager>
+pub struct DbManager{
+    rx_dbmanager: Receiver<Msg2DbManager>,
+    pub tx_dbmanager: Sender<Msg2DbManager>,
+    pool: Pool<ConnectionManager<PgConnection>>
 }
 
-impl UserManager {
-    pub async fn run(&mut self) {
+impl DbManager {
+    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
+        let (tx_dbmanager, rx_dbmanager) = channel(50);
+        Self {
+            tx_dbmanager,
+            rx_dbmanager,
+            pool
+        }
+    }
+
+    pub async fn run(&mut self) -> () {
         loop {
-            if let Some(msg) = self.rx_usermanager.recv().await {
+            if let Some(msg) = self.rx_dbmanager.recv().await {
                 match msg {
-                    Msg2UserManager::CreateUser(req) => {
+                    Msg2DbManager::CreateUser(req) => {
 
                     },
-                    Msg2UserManager::AddEmail(req) => {
+                    Msg2DbManager::AddEmail(req) => {
 
                     },
-                    Msg2UserManager::RemEmail(req) => {
+                    Msg2DbManager::RemEmail(req) => {
 
                     },
-                    Msg2UserManager::PrimaryEmail(req) => {
+                    Msg2DbManager::PrimaryEmail(req) => {
 
                     },
-                    Msg2UserManager::EnableUser(req) => {
+                    Msg2DbManager::EnableUser(req) => {
 
                     },
-                    Msg2UserManager::DisableUser(req) => {
+                    Msg2DbManager::DisableUser(req) => {
 
                     },
-                    Msg2UserManager::SetPassword(req) => {
+                    Msg2DbManager::SetPassword(req) => {
 
                     },
-                    Msg2UserManager::SetStorage(req) => {
+                    Msg2DbManager::SetStorage(req) => {
 
                     },
-                    Msg2UserManager::DelStorage(req) => {
+                    Msg2DbManager::DelStorage(req) => {
 
                     },
-                    Msg2UserManager::WipeStorage(req) => {
+                    Msg2DbManager::WipeStorage(req) => {
 
                     },
-                    Msg2UserManager::Kill => {
+                    Msg2DbManager::BanUser(req) => {
+
+                    },
+                    Msg2DbManager::UnbanUser(req) => {
+
+                    }
+                    Msg2DbManager::Kill => {
                         break;
                     }
                 }

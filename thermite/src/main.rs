@@ -27,6 +27,7 @@ use tokio_rustls::{
 };
 
 use thermite::config::{Config, ServerConfig as ThermiteServer};
+use thermite::db::DbManager;
 use std::str::FromStr;
 
 
@@ -49,6 +50,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let db_manager = ConnectionManager::<PgConnection>::new(database_url);
     let db_pool = Pool::builder().build(db_manager).expect("Could not start Database connection pool.");
 
+    let mut db = DbManager::new(db_pool);
+    let tx_dbmanager = db.tx_dbmanager.clone();
+
+    let db_task = tokio::spawn(async move {db.run().await});
+
     let mut telnet_server = TelnetServer::new();
     let tx_telnet = telnet_server.tx_server.clone();
 
@@ -62,8 +68,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             telnet_server.listen(String::from(k), listener, None);
         }
     }
-    //let telnet_task = tokio::spawn(async move {telnet_server.run();});
-    //telnet_task.await;
-    telnet_server.run().await;
+    let telnet_task = tokio::spawn(async move {telnet_server.run().await});
+    telnet_task.await;
+
     Ok(())
 }
