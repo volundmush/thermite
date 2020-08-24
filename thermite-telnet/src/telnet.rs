@@ -17,7 +17,8 @@ use std::{
     iter,
     io,
     vec::Vec,
-    net::SocketAddr
+    net::SocketAddr,
+    convert::TryInto
 };
 
 use flate2::{
@@ -37,7 +38,6 @@ use futures::{
     sink::{Sink, SinkExt},
     stream::{Stream, StreamExt}
 };
-use std::convert::TryInto;
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -129,7 +129,8 @@ pub enum TelnetSend {
     Line(Vec<u8>),
     Prompt(Vec<u8>),
     Sub((u8, Vec<u8>)),
-    Command((u8, u8))
+    Command((u8, u8)),
+    RawBytes(Vec<u8>)
 }
 
 pub enum IacSection {
@@ -321,7 +322,7 @@ impl Encoder<TelnetSend> for TelnetCodec {
                 outgoing.extend(data);
             }
             TelnetSend::Prompt(data) => {
-
+                // Not sure what to do about prompts yet.
             },
             TelnetSend::Command((comm, op)) => {
                 outgoing.put_u8(tc::IAC);
@@ -341,6 +342,9 @@ impl Encoder<TelnetSend> for TelnetCodec {
                 if op == tc::MCCP2 {
                     self.mccp2 = true;
                 }
+            },
+            TelnetSend::RawBytes(data) => {
+                outgoing.extend(data);
             }
         }
         if self.mccp2 {
@@ -602,29 +606,25 @@ impl TelnetProtocol {
     }
 
     pub async fn run(&mut self) {
-
-        let mut start_will: Vec<u8> = Vec::default();
-        let mut start_do: Vec<u8> = Vec::default();
+        let mut raw_bytes: Vec<u8> = Vec::with_capacity(self.op_state.len());
 
         for (b, handler) in self.op_state.iter_mut() {
 
             if handler.start_will {
                 handler.server.negotiating = true;
-                start_will.push(b.clone());
+                raw_bytes.push(tc::IAC);
+                raw_bytes.push(tc::WILL);
+                raw_bytes.push(b.clone());
             }
             if handler.start_do {
                 handler.client.negotiating = true;
-                start_do.push(b.clone());
+                raw_bytes.push(tc::IAC);
+                raw_bytes.push(tc::DO);
+                raw_bytes.push(b.clone());
             }
         }
-
-        for b in start_will {
-            self.send_iac_command(tc::WILL, b).await;
-        }
-
-        for b in start_do {
-            self.send_iac_command(tc::DO, b).await;
-        }
+        // Just packing all of this together so it gets sent at once.
+        self.tx_writer.send(Msg2Writer::Data(TelnetSend::RawBytes(raw_bytes))).await;
 
         loop {
             if let Some(msg) = self.rx_protocol.recv().await {

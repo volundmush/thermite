@@ -2,4 +2,5 @@
 
 members = [
     "thermite-telnet",
+    "thermite"
 ]
