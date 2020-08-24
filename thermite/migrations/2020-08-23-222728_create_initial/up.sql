@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS thermite_users (
     id SERIAL NOT NULL PRIMARY KEY,
     username VARCHAR(255) UNIQUE NOT NULL,
     joined timestamp with time zone NOT NULL,
-    password_hash text NULL,
+    password_hash text NOT NULL,
     active boolean NOT NULL DEFAULT true,
     is_superuser boolean NOT NULL DEFAULT false
 );
@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS thermite_users_sessions (
     id SERIAL NOT NULL PRIMARY KEY,
     user_id INT NOT NULL REFERENCES thermite_users(id) ON DELETE CASCADE,
     created timestamp with time zone NOT NULL,
-    valid_until timestamp with time zone NOT NULL
+    valid_until timestamp with time zone NOT NULL,
+    session_key VARCHAR(16) NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS thermite_users_storage (
@@ -79,7 +80,8 @@ CREATE TABLE IF NOT EXISTS thermite_games (
 
 CREATE TABLE IF NOT EXISTS thermite_games_apikeys (
     id SERIAL NOT NULL PRIMARY KEY,
-    game_id INT NOT NULL REFERENCES thermite_games(id) ON DELETE CASCADE
+    game_id INT NOT NULL REFERENCES thermite_games(id) ON DELETE CASCADE,
+    game_key VARCHAR(16) NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS thermite_games_members (
@@ -87,7 +89,9 @@ CREATE TABLE IF NOT EXISTS thermite_games_members (
     game_id INT NOT NULL REFERENCES thermite_games(id) ON DELETE CASCADE,
     user_id INT NOT NULL,
     joined timestamp with time zone NOT NULL,
-    UNIQUE(game_id, user_id)
+    member_key VARCHAR(16) NOT NULL,
+    UNIQUE(game_id, user_id),
+    UNIQUE(game_id, member_key)
 );
 
 CREATE TABLE IF NOT EXISTS thermite_games_bans (

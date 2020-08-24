@@ -185,11 +185,13 @@ checksum = "3e2de9deab977a153492a1468d1b1c0662c1cf39e5ea87d0c060ecd59ef18d8c"
 dependencies = [
  "bitflags",
  "byteorder",
+ "chrono",
  "diesel_derives",
  "libsqlite3-sys",
  "mysqlclient-sys",
  "pq-sys",
  "r2d2",
+ "serde_json",
  "url",
 ]
 
@@ -427,6 +429,12 @@ checksum = "b2b3ea6ff95e175473f8ffe6a7eb7c00d054240321b84c57051175fe3c1e075e"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "itoa"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6f3ad7b9d11a0c00842ff8de1b60ee58661048eb8049ed33c73594f359d7e6"
 
 [[package]]
 name = "js-sys"
@@ -888,6 +896,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ryu"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
+
+[[package]]
 name = "scheduled-thread-pool"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -930,6 +944,17 @@ dependencies = [
  "proc-macro2",
  "quote 1.0.7",
  "syn 1.0.38",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "164eacbdb13512ec2745fb09d51fd5b22b0d65ed294a1dcf7285a360c80a675c"
+dependencies = [
+ "itoa",
+ "ryu",
+ "serde",
 ]
 
 [[package]]
@@ -1036,12 +1061,14 @@ dependencies = [
 name = "thermite"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "diesel",
  "diesel_cli",
  "dotenv 0.15.0",
  "rand",
  "serde",
  "serde_derive",
+ "serde_json",
  "thermite-telnet",
  "tokio",
  "tokio-diesel",

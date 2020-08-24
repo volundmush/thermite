@@ -22,7 +22,6 @@ pub struct Keys {
 
 #[derive(Deserialize)]
 pub struct ServerConfig {
-    pub name: String,
     pub tls: Option<String>,
     pub interface: String,
     pub port: u16
@@ -33,14 +32,14 @@ pub struct Config {
     pub tls: HashMap<String, Keys>,
     pub interfaces: HashMap<String, String>,
     pub database: HashMap<String, String>,
-    pub servers: HashMap<String, ServerConfig>
+    pub telnet: HashMap<String, ServerConfig>
 }
 
 impl Config {
     // Reads a toml file and
     pub fn from_file(file_name: String) -> Result<Self, Box<dyn Error>> {
-        let conf_txt = read_to_string(file_name)?.parse()?;
-        let conf: Self = toml::from_str(conf_txt)?;
+        let conf_txt = read_to_string(String::from(file_name))?;
+        let conf: Self = toml::from_str(&conf_txt)?;
         Ok(conf)
     }
 }

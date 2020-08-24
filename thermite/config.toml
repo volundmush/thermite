@@ -6,8 +6,8 @@ any = "0.0.0.0"
 localhost = "127.0.0.1"
 external = "0.0.0.0"
 
-[servers]
-telnet_basic = {interface = "external", port = 7999}
+[telnet]
+plain = {interface = "external", port = 7999}
 
 [database]
 postgres = "postgres://thermite:thermite@localhost/thermite"

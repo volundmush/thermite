@@ -1093,9 +1093,8 @@ pub struct Listener {
 pub struct TelnetServer {
     connections: HashMap<String, Connection>,
     listeners: HashMap<String, Listener>,
-    tx_server: mpsc::Sender<Msg2Server>,
+    pub tx_server: mpsc::Sender<Msg2Server>,
     rx_server: mpsc::Receiver<Msg2Server>,
-
 }
 
 impl TelnetServer {

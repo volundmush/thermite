@@ -11,11 +11,13 @@ tokio = {version = "0.2", features = ["full"]}
 tokio-util = {version = "0.3", features = ["codec"]}
 tokio-rustls = "0.14"
 rand = "0.7"
-diesel = {version = "1.4", features=["postgres"]}
+diesel = {version = "1.4", features=["postgres", "chrono", "serde_json"]}
 diesel_cli = "1.4"
 tokio-diesel = "0.3"
 serde = "1.0"
 serde_derive = "1.0"
+serde_json = "1.0"
 thermite-telnet = {version = "0.1", path="../thermite-telnet"}
 dotenv = "0.15"
 toml = "0.5"
+chrono = "0.4"
