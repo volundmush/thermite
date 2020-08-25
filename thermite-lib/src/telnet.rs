@@ -28,16 +28,12 @@ use flate2::{
 
 use bytes::{BytesMut, Buf, BufMut};
 
-use rand::{
-    Rng,
-    thread_rng,
-    distributions::Alphanumeric
-};
-
 use futures::{
     sink::{Sink, SinkExt},
     stream::{Stream, StreamExt}
 };
+
+use thermite_lib::random_alphanum;
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -1165,19 +1161,12 @@ impl TelnetServer {
         self.connections.insert(new_id, conn_data);
     }
 
-    fn rand_string(&self) -> String {
-        let mut rng = thread_rng();
-        iter::repeat(())
-            .map(|()| rng.sample(Alphanumeric))
-            .take(16)
-            .collect()
-    }
-
     fn generate_id(&self) -> String {
-        let mut new_id: String = self.rand_string();
-        while self.connections.contains_key(&new_id) {
-            new_id = self.rand_string();
+        loop {
+            let new_id: String = random_alphanum(16);
+            if !self.connections.contains_key(&new_id) {
+                return new_id;
+            }
         }
-        new_id
     }
 }

@@ -4,7 +4,7 @@ use diesel::{
     r2d2::{ConnectionManager, Pool}
 };
 
-use thermite_telnet::telnet::{TelnetServer};
+use thermite_lib::telnet::{TelnetServer};
 use tokio::net::TcpListener;
 use std::{
     env,

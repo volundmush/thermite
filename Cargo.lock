@@ -1069,7 +1069,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "thermite-telnet",
+ "thermite-lib",
  "tokio",
  "tokio-diesel",
  "tokio-rustls",
@@ -1078,7 +1078,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "thermite-telnet"
+name = "thermite-lib"
 version = "0.1.0"
 dependencies = [
  "bytes",
