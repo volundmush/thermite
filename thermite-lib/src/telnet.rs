@@ -1,16 +1,12 @@
 use tokio::{
     prelude::*,
     task::JoinHandle,
-    sync::mpsc,
+    sync::mpsc::{Receiver, Sender, channel},
     net::{TcpListener, TcpStream}
 };
 
 use tokio_util::codec::{Encoder, Decoder, Framed};
 
-use tokio_rustls::{
-    TlsAcceptor,
-    server::TlsStream
-};
 
 use std::{
     collections::HashMap,
@@ -32,8 +28,6 @@ use futures::{
     sink::{Sink, SinkExt},
     stream::{Stream, StreamExt}
 };
-
-use thermite_lib::random_alphanum;
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -432,14 +426,14 @@ pub enum Msg2Reader {
 pub struct TelnetReader<T>
 {
     pub reader: T,
-    pub tx_protocol: mpsc::Sender<Msg2Protocol>,
-    pub rx_reader: mpsc::Receiver<Msg2Reader>,
+    pub tx_protocol: Sender<Msg2Protocol>,
+    pub rx_reader: Receiver<Msg2Reader>,
 }
 
 impl<T> TelnetReader<T> where
     T: Stream<Item = io::Result<TelnetMessage>> + Unpin
     {
-    pub fn new(reader: T, tx_protocol: mpsc::Sender<Msg2Protocol>, rx_reader: mpsc::Receiver<Msg2Reader>) -> Self {
+    pub fn new(reader: T, tx_protocol: Sender<Msg2Protocol>, rx_reader: Receiver<Msg2Reader>) -> Self {
         Self {
             reader,
             tx_protocol,
@@ -482,13 +476,13 @@ pub enum Msg2Writer {
 
 pub struct TelnetWriter<T> {
     pub writer: T,
-    pub tx_protocol: mpsc::Sender<Msg2Protocol>,
-    pub rx_writer: mpsc::Receiver<Msg2Writer>,
+    pub tx_protocol: Sender<Msg2Protocol>,
+    pub rx_writer: Receiver<Msg2Writer>,
 }
 
 impl<T: Sink<TelnetSend> + Unpin> TelnetWriter<T> {
 
-    pub fn new(writer: T, tx_protocol: mpsc::Sender<Msg2Protocol>, rx_writer: mpsc::Receiver<Msg2Writer>) -> Self {
+    pub fn new(writer: T, tx_protocol: Sender<Msg2Protocol>, rx_writer: Receiver<Msg2Writer>) -> Self {
         Self {
             writer,
             tx_protocol,
@@ -520,36 +514,35 @@ pub enum Msg2Protocol {
 }
 
 pub struct TelnetProtocol {
-    pub op_state: HashMap<u8, TelnetOptionState>,
-    pub enabled: bool,
-    pub config: TelnetConfig,
-    pub conn_id: String,
-    pub handshakes_left: u8,
-    pub ttype_handshakes: u8,
-    pub ttype_first: Option<Vec<u8>>,
-    pub reader_handle: JoinHandle<()>,
-    pub writer_handle: JoinHandle<()>,
-    pub tx_protocol: mpsc::Sender<Msg2Protocol>,
-    pub rx_protocol: mpsc::Receiver<Msg2Protocol>,
-    pub tx_reader: mpsc::Sender<Msg2Reader>,
-    pub tx_writer: mpsc::Sender<Msg2Writer>,
-    pub tx_server: mpsc::Sender<Msg2Server>
+    op_state: HashMap<u8, TelnetOptionState>,
+    enabled: bool,
+    config: TelnetConfig,
+    conn_id: String,
+    handshakes_left: u8,
+    ttype_handshakes: u8,
+    ttype_first: Option<Vec<u8>>,
+    reader_handle: JoinHandle<()>,
+    writer_handle: JoinHandle<()>,
+    tx_protocol: Sender<Msg2Protocol>,
+    rx_protocol: Receiver<Msg2Protocol>,
+    rx_telnet: Receiver<Msg2TelnetProtocol>,
+    tx_telnet: Sender<Msg2TelnetProtocol>
+    tx_reader: Sender<Msg2Reader>,
+    tx_writer: Sender<Msg2Writer>,
 }
 
 impl TelnetProtocol {
-    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static, tx_server: mpsc::Sender<Msg2Server>, tls: bool) -> Self {
+    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static, addr: SocketAddr, tls: bool, rx_protocol: Receiver<Msg2Protocol>, tx_portal: Sender<Msg2Portal>) -> Self {
 
         let telnet_codec = Framed::new(conn, TelnetCodec::new(true));
-
         let (write, read) = telnet_codec.split();
 
-        let (tx_protocol, rx_protocol) = mpsc::channel(50);
-        let (tx_reader, rx_reader) = mpsc::channel(50);
-        let (tx_writer, rx_writer) = mpsc::channel(50);
+        let (tx_telnet, rx_telnet) = channel(50);
+        let (tx_reader, rx_reader) = channel(50);
+        let (tx_writer, rx_writer) = channel(50);
 
-        let mut reader = TelnetReader::new(read, tx_protocol.clone(), rx_reader);
-
-        let mut writer = TelnetWriter::new(write, tx_protocol.clone(), rx_writer);
+        let mut reader = TelnetReader::new(read, tx_telnet.clone(), rx_reader);
+        let mut writer = TelnetWriter::new(write, tx_telnet.clone(), rx_writer);
 
         let read_handle = tokio::spawn(async move {
             reader.run().await;
@@ -993,180 +986,5 @@ impl TelnetProtocol {
         let height = u16::from_le_bytes(height.try_into().unwrap());
         self.config.width = width;
         self.config.height = height;
-    }
-}
-
-pub enum Msg2Server {
-    ClientDisconnected((String, Option<String>)),
-    AcceptTcp((TcpStream, SocketAddr)),
-    AcceptTls((TlsStream<TcpStream>, SocketAddr))
-}
-
-
-pub struct Connection {
-    addr: SocketAddr,
-    conn_id: String,
-    handle: JoinHandle<()>,
-    tx_protocol: mpsc::Sender<Msg2Protocol>,
-}
-
-pub enum Msg2Listener {
-    Kill
-}
-
-pub struct TelnetListener {
-    listen_id: String,
-    listener: TcpListener,
-    tls_acceptor: Option<TlsAcceptor>,
-    tx_server: mpsc::Sender<Msg2Server>,
-    tx_listener: mpsc::Sender<Msg2Listener>,
-    rx_listener: mpsc::Receiver<Msg2Listener>
-}
-
-impl TelnetListener {
-    pub fn new(listener: TcpListener, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_server: mpsc::Sender<Msg2Server>) -> Self {
-        let (tx_listener, rx_listener) = mpsc::channel(50);
-        Self {
-            listen_id,
-            tx_server,
-            tls_acceptor,
-            listener,
-            tx_listener,
-            rx_listener
-        }
-    }
-
-    pub async fn run(&mut self) {
-        loop {
-            tokio::select! {
-                listen_msg = self.rx_listener.recv() => {
-                    if let Some(lis_msg) = listen_msg {
-                        match lis_msg {
-                            Msg2Listener::Kill => {
-                                // I'll worry about this later I guess?
-                                break;
-                            }
-                        }
-                    }
-                },
-                incoming = self.listener.accept() => {
-                    match incoming {
-                        Ok((tcp_stream, addr)) => {
-                            match &self.tls_acceptor {
-                                Option::Some(acc) => {
-                                    // TLS is engaged. let's get connecting!
-                                    let c_acc = acc.clone();
-                                    if let Ok(tls_stream) = c_acc.accept(tcp_stream).await {
-                                        self.tx_server.send(Msg2Server::AcceptTls((tls_stream, addr))).await;
-                                    } else {
-                                        // Not sure what to do if TLS fails...
-                                    }
-                                },
-                                Option::None => {
-                                    // TLS is not engaged.
-                                    self.tx_server.send(Msg2Server::AcceptTcp((tcp_stream, addr))).await;
-                                }
-                            }
-                        },
-                        Err(e) => {
-
-                        }
-                    }
-                },
-            }
-        }
-    }
-
-}
-
-pub struct Listener {
-    addr: SocketAddr,
-    listen_id: String,
-    handle: JoinHandle<()>,
-    tx_listener: mpsc::Sender<Msg2Listener>
-}
-
-pub struct TelnetServer {
-    connections: HashMap<String, Connection>,
-    listeners: HashMap<String, Listener>,
-    pub tx_server: mpsc::Sender<Msg2Server>,
-    rx_server: mpsc::Receiver<Msg2Server>,
-}
-
-impl TelnetServer {
-
-    pub fn new() -> Self {
-        let (tx_server, rx_server) = mpsc::channel(50);
-        Self {
-            connections: Default::default(),
-            listeners: Default::default(),
-            tx_server,
-            rx_server,
-        }
-    }
-
-    pub async fn run(&mut self) {
-        loop {
-            tokio::select! {
-                srv_msg = self.rx_server.recv() => {
-                    if let Some(sr_msg) = srv_msg {
-                        match sr_msg {
-                            Msg2Server::ClientDisconnected((id, reason)) => {
-                                // I'll worry about this later I guess?
-                                self.connections.remove(&id);
-                            },
-                            Msg2Server::AcceptTcp((stream, addr)) => {
-                                self.accept(stream, addr, false);
-                            },
-                            Msg2Server::AcceptTls((stream, addr)) => {
-                                self.accept(stream, addr, true);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn listen(&mut self, listen_id: String, listener: TcpListener, tls: Option<TlsAcceptor>) {
-        if self.listeners.contains_key(&listen_id) {
-            return;
-        }
-        let addr = listener.local_addr().unwrap();
-        let mut listener = TelnetListener::new(listener, tls, listen_id.clone(), self.tx_server.clone());
-        let tx_listener = listener.tx_listener.clone();
-
-        let handle = tokio::spawn(async move {listener.run().await});
-
-        let mut listen_stub = Listener {
-            addr,
-            listen_id: listen_id.clone(),
-            handle,
-            tx_listener
-        };
-        self.listeners.insert(listen_id, listen_stub);
-    }
-
-    fn accept(&mut self, conn: impl AsyncRead + AsyncWrite + Send + 'static, addr: SocketAddr, tls: bool) {
-        let new_id = self.generate_id();
-        let mut protocol = TelnetProtocol::new(new_id.clone(), conn, self.tx_server.clone(), tls);
-        let tx_protocol = protocol.tx_protocol.clone();
-        let handle = tokio::spawn(async move {protocol.run().await;});
-        let conn_data = Connection {
-            addr,
-            conn_id: new_id.clone(),
-            handle,
-            tx_protocol
-        };
-        self.connections.insert(new_id, conn_data);
-    }
-
-    fn generate_id(&self) -> String {
-        loop {
-            let new_id: String = random_alphanum(16);
-            if !self.connections.contains_key(&new_id) {
-                return new_id;
-            }
-        }
     }
 }
