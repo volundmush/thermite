@@ -151,14 +151,26 @@ pub enum Msg2Portal {
     NewTlsConnection(TlsStream<TcpStream>, SocketAddr, ProtocolType)
 }
 
-pub struct ClientPortal {
-    pub listeners: HashMap<String, ListenerLink>,
-    pub connections: HashMap<String, ConnectionLink>,
+pub struct Portal {
+    listeners: HashMap<String, ListenerLink>,
+    connections: HashMap<String, ConnectionLink>,
     pub tx_portal: Sender<Msg2Portal>,
-    pub rx_portal: Receiver<Msg2Portal>,
+    rx_portal: Receiver<Msg2Portal>,
 }
 
-impl ClientPortal {
+impl Default for Portal {
+    fn default() -> Self {
+        let (tx_portal, rx_portal) = channel(50);
+        Self {
+            listeners: HashMap::default(),
+            connections: HashMap::default(),
+            tx_portal,
+            rx_portal
+        }
+    }
+}
+
+impl Portal {
     pub async fn run(&mut self) {
         loop {
             if let Some(msg) = self.rx_portal.recv().await {
