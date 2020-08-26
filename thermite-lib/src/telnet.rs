@@ -81,7 +81,7 @@ pub enum TelnetState {
 // Line was definitely a line.
 // Data byte by byte application data... bad news for me.
 #[derive(Clone)]
-pub enum TelnetMessage {
+pub enum TelnetReceive {
     Line(Vec<u8>),
     Data(u8),
     Will(u8),
@@ -89,29 +89,6 @@ pub enum TelnetMessage {
     Do(u8),
     Dont(u8),
     Sub((u8, Vec<u8>))
-}
-
-pub struct TelMsgHolder {
-    msg: TelnetMessage
-}
-
-pub trait TelnetMsgHolder {
-    fn get_msg(&self) -> TelnetMessage;
-}
-
-impl TelnetMsgHolder for TelMsgHolder {
-
-    fn get_msg(&self) -> TelnetMessage {
-        self.msg.clone()
-    }
-}
-
-impl TelMsgHolder {
-    pub fn new(msg: TelnetMessage) -> Self {
-        TelMsgHolder {
-            msg
-        }
-    }
 }
 
 pub enum TelnetSend {
@@ -198,7 +175,7 @@ impl TelnetCodec {
 }
 
 impl Decoder for TelnetCodec {
-    type Item = TelnetMessage;
+    type Item = TelnetReceive;
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -221,10 +198,10 @@ impl Decoder for TelnetCodec {
                     },
                     IacSection::Command((comm, op)) => {
                         match comm {
-                            tc::WILL => return Ok(Some(TelnetMessage::Will(op))),
-                            tc::WONT => return Ok(Some(TelnetMessage::Wont(op))),
-                            tc::DO => return Ok(Some(TelnetMessage::Do(op))),
-                            tc::DONT => return Ok(Some(TelnetMessage::Dont(op))),
+                            tc::WILL => return Ok(Some(TelnetReceive::Will(op))),
+                            tc::WONT => return Ok(Some(TelnetReceive::Wont(op))),
+                            tc::DO => return Ok(Some(TelnetReceive::Do(op))),
+                            tc::DONT => return Ok(Some(TelnetReceive::Dont(op))),
                             tc::SB => {
                                 match self.state {
                                     TelnetState::Data => {
@@ -244,7 +221,7 @@ impl Decoder for TelnetCodec {
                     IacSection::SE => {
                         match self.state {
                             TelnetState::Sub(op) => {
-                                let msg = TelnetMessage::Sub((op, self.sub_data.clone()));
+                                let msg = TelnetReceive::Sub((op, self.sub_data.clone()));
                                 self.sub_data.clear();
                                 self.state = TelnetState::Data;
                                 // MCCP3 must be enabled on the encoder immediately after receiving
@@ -273,7 +250,7 @@ impl Decoder for TelnetCodec {
                                 tc::LF => {
                                     let line = self.app_data.to_vec();
                                     self.app_data.clear();
-                                    return Ok(Some(TelnetMessage::Line(line)));
+                                    return Ok(Some(TelnetReceive::Line(line)));
                                 },
                                 _ => {
                                     self.app_data.push(byte);
@@ -281,7 +258,7 @@ impl Decoder for TelnetCodec {
                             }
                         } else {
                             // I really don't wanna be using data mode.. ever.
-                            return Ok(Some(TelnetMessage::Data(byte)));
+                            return Ok(Some(TelnetReceive::Data(byte)));
                         }
                     },
                     TelnetState::Sub(op) => {
@@ -419,151 +396,38 @@ impl Default for TelnetConfig {
     }
 }
 
-pub enum Msg2Reader {
-    Kill
-}
-
-pub struct TelnetReader<T>
-{
-    pub reader: T,
-    pub tx_protocol: Sender<Msg2Protocol>,
-    pub rx_reader: Receiver<Msg2Reader>,
-}
-
-impl<T> TelnetReader<T> where
-    T: Stream<Item = io::Result<TelnetMessage>> + Unpin
-    {
-    pub fn new(reader: T, tx_protocol: Sender<Msg2Protocol>, rx_reader: Receiver<Msg2Reader>) -> Self {
-        Self {
-            reader,
-            tx_protocol,
-            rx_reader
-        }
-    }
-
-    pub async fn run(&mut self) {
-        loop {
-            tokio::select! {
-                item = self.reader.next() => {
-                    if let Some(tel_msg) = item {
-                        match tel_msg {
-                            Ok(t_msg) => {
-                                self.tx_protocol.send(Msg2Protocol::TelnetMsg(t_msg)).await;
-                            }
-                            Err(e) => {
-                                eprintln!("SOMETHING WENT BOGUS! {}", e);
-                                // Will deal with this later.
-                            }
-                        }
-                    }
-                },
-                Some(msg) = self.rx_reader.recv() => {
-                    match msg {
-                        Msg2Reader::Kill => {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-pub enum Msg2Writer {
-    Kill,
-    Data(TelnetSend)
-}
-
-pub struct TelnetWriter<T> {
-    pub writer: T,
-    pub tx_protocol: Sender<Msg2Protocol>,
-    pub rx_writer: Receiver<Msg2Writer>,
-}
-
-impl<T: Sink<TelnetSend> + Unpin> TelnetWriter<T> {
-
-    pub fn new(writer: T, tx_protocol: Sender<Msg2Protocol>, rx_writer: Receiver<Msg2Writer>) -> Self {
-        Self {
-            writer,
-            tx_protocol,
-            rx_writer
-        }
-    }
-
-    pub async fn run(&mut self) {
-        loop {
-            if let Some(msg) = self.rx_writer.recv().await {
-                match msg {
-                    Msg2Writer::Kill => {
-                        break;
-                    },
-                    Msg2Writer::Data(msg) => {
-                        self.writer.send(msg).await;
-                    }
-                }
-            }
-        }
-    }
-}
-
-pub enum Msg2Protocol {
-    ReaderDisconnected(Option<String>),
-    WriterDisconnected(Option<String>),
-    ServerDisconnected(Option<String>),
-    TelnetMsg(TelnetMessage)
-}
-
-pub struct TelnetProtocol {
+pub struct TelnetProtocol<T> {
     op_state: HashMap<u8, TelnetOptionState>,
     enabled: bool,
     config: TelnetConfig,
     conn_id: String,
     handshakes_left: u8,
     ttype_handshakes: u8,
+    read: FramedRead<T, TelnetCodec>,
+    write: FramedWrite<T, TelnetCodec>,
     ttype_first: Option<Vec<u8>>,
-    reader_handle: JoinHandle<()>,
-    writer_handle: JoinHandle<()>,
     tx_protocol: Sender<Msg2Protocol>,
-    rx_protocol: Receiver<Msg2Protocol>,
-    rx_telnet: Receiver<Msg2TelnetProtocol>,
-    tx_telnet: Sender<Msg2TelnetProtocol>
-    tx_reader: Sender<Msg2Reader>,
-    tx_writer: Sender<Msg2Writer>,
+    rx_protocol: Receiver<Msg2Protocol>
 }
 
-impl TelnetProtocol {
-    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static, addr: SocketAddr, tls: bool, rx_protocol: Receiver<Msg2Protocol>, tx_portal: Sender<Msg2Portal>) -> Self {
+impl<T> TelnetProtocol<T> where 
+    T: AsyncRead + AsyncWrite + Send + 'static
+{
+    pub fn new(conn_id: String, conn: T, addr: SocketAddr, tls: bool, rx_protocol: Receiver<Msg2Protocol>, tx_portal: Sender<Msg2Portal>) -> Self {
 
         let telnet_codec = Framed::new(conn, TelnetCodec::new(true));
         let (write, read) = telnet_codec.split();
 
-        let (tx_telnet, rx_telnet) = channel(50);
-        let (tx_reader, rx_reader) = channel(50);
-        let (tx_writer, rx_writer) = channel(50);
-
-        let mut reader = TelnetReader::new(read, tx_telnet.clone(), rx_reader);
-        let mut writer = TelnetWriter::new(write, tx_telnet.clone(), rx_writer);
-
-        let read_handle = tokio::spawn(async move {
-            reader.run().await;
-        });
-
-        let write_handle = tokio::spawn(async move {
-            writer.run().await;
-        });
-
         let mut prot = TelnetProtocol {
             conn_id,
-            reader_handle: read_handle,
-            writer_handle: write_handle,
             tx_server,
             op_state: Default::default(),
             enabled: false,
             config: TelnetConfig::default(),
             tx_protocol,
             rx_protocol,
-            tx_reader,
-            tx_writer,
+            write,
+            read,
             handshakes_left: 0,
             ttype_handshakes: 0,
             ttype_first: None
@@ -613,62 +477,50 @@ impl TelnetProtocol {
             }
         }
         // Just packing all of this together so it gets sent at once.
-        self.tx_writer.send(Msg2Writer::Data(TelnetSend::RawBytes(raw_bytes))).await;
+        self.write.send(TelnetSend::RawBytes(raw_bytes)).await;
 
         loop {
-            if let Some(msg) = self.rx_protocol.recv().await {
-                match msg {
-                    Msg2Protocol::ServerDisconnected(reason) => {
-                        if let Some(display) = reason {
-                            // Do something with the reason I guess?
-                        };
-                        self.tx_reader.send(Msg2Reader::Kill).await;
-                        self.tx_writer.send(Msg2Writer::Kill).await;
-                        break;
-                    },
-                    Msg2Protocol::ReaderDisconnected(reason) => {
-                        if let Some(display) = reason {
-                            // Do something with the reason I guess?
-                        };
-                        self.tx_writer.send(Msg2Writer::Kill).await;
-                        break;
-                    },
-                    Msg2Protocol::WriterDisconnected(reason) => {
-                        if let Some(display) = reason {
-                            // Do something with the reason I guess?
-                        };
-                        self.tx_reader.send(Msg2Reader::Kill).await;
-                        break;
-                    },
-                    Msg2Protocol::TelnetMsg(msg) => {
+            tokio::select! {
+                t_msg = self.read.next() => {
+                    if let Some(msg) = t_msg {
                         match msg {
-                            TelnetMessage::Data(b) => {
+                            TelnetReceive::Data(b) => {
                                 self.receive_data(b).await;
                             },
-                            TelnetMessage::Line(bytes) => {
+                            TelnetReceive::Line(bytes) => {
                                 self.receive_line(bytes).await;
                             },
-                            TelnetMessage::Sub((op, data)) => {
+                            TelnetReceive::Sub((op, data)) => {
                                 self.receive_sub(op, data).await;
                             },
-                            TelnetMessage::Will(op) => self.iac_receive(tc::WILL, op).await,
-                            TelnetMessage::Wont(op) => self.iac_receive(tc::WONT, op).await,
-                            TelnetMessage::Do(op) => self.iac_receive(tc::DO, op).await,
-                            TelnetMessage::Dont(op) => self.iac_receive(tc::DONT, op).await,
+                            TelnetReceive::Will(op) => self.iac_receive(tc::WILL, op).await,
+                            TelnetReceive::Wont(op) => self.iac_receive(tc::WONT, op).await,
+                            TelnetReceive::Do(op) => self.iac_receive(tc::DO, op).await,
+                            TelnetReceive::Dont(op) => self.iac_receive(tc::DONT, op).await,
 
+                        }
+                    }
+                },
+                p_msg = self.rx_protocol.recv() => {
+                    if let Some(msg) = p_msg {
+                        match msg {
+                            Msg2Protocol::Kill => {
+
+                            }
                         }
                     }
                 }
             }
+            
         }
     }
 
     async fn send_iac_command(&mut self, command: u8, op: u8) {
-        self.tx_writer.send(Msg2Writer::Data(TelnetSend::Command((command, op)))).await;
+        self.write.send(TelnetSend::Command((command, op))).await;
     }
 
     async fn send_sub_data(&mut self, op: u8, data: Vec<u8>) {
-        self.tx_writer.send(Msg2Writer::Data(TelnetSend::Sub((op, data)))).await;
+        self.write.send(TelnetSend::Sub((op, data))).await;
     }
 
     async fn iac_receive(&mut self, command: u8, op: u8) {

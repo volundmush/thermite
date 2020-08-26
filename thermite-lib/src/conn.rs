@@ -15,7 +15,10 @@ use tokio_rustls::{
     server::TlsStream
 };
 
-use thermite_lib::telnet::TelnetProtocol;
+use thermite_lib::{
+    telnet::TelnetProtocol,
+    websocket::WebSocketProtocol
+};
 
 
 pub enum ProtocolType {
@@ -31,6 +34,7 @@ pub struct Listener {
     pub listen_id: String,
     pub listen_type: ProtocolType,
     pub listener: TcpListener,
+    pub addr: SocketAddr,
     pub protocol: ProtocolType,
     pub tls_acceptor: Option<TlsAcceptor>,
     pub rx_listener: Receiver<Msg2Listener>,
@@ -39,7 +43,7 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn new(listener: TcpListener, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_portal: Sender<Msg2Portal>, protocol: ProtocolType) -> Self {
+    pub fn new(listener: TcpListener, addr: SocketAddr, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_portal: Sender<Msg2Portal>, protocol: ProtocolType) -> Self {
         let (tx_listener, rx_listener) = channel(50);
         Self {
             listen_id,
@@ -47,6 +51,7 @@ impl Listener {
             tx_portal,
             tls_acceptor,
             listener,
+            addr,
             protocol,
             tx_listener,
             rx_listener
@@ -100,6 +105,7 @@ impl Listener {
 pub struct ListenerLink {
     pub listen_id: String,
     pub listen_type: ProtocolType,
+    pub addr: SocketAddr,
     pub tls: bool,
     pub handle: JoinHandle<()>,
     pub tx_listener: Sender<Msg2Listener>,
@@ -181,16 +187,18 @@ impl ClientPortal {
         }
         let addr = listener.local_addr().unwrap();
 
-        let mut listener = Listener::new(listener, tls, listen_id.clone(), self.tx_portal.clone(), protocol.clone());
+        let mut listener = Listener::new(listener, addr.clone(), tls, listen_id.clone(), self.tx_portal.clone(), protocol.clone());
         let tx_listener = listener.tx_listener.clone();
 
         let handle = tokio::spawn(async move {listener.run().await});
 
-        let mut listen_stub = Listener {
+        let mut listen_stub = ListenerLink {
             addr,
             listen_id: listen_id.clone(),
+            listen_type: protocol,
             handle,
-            tx_listener
+            tx_listener,
+            tls
         };
         self.listeners.insert(listen_id, listen_stub);
     }
