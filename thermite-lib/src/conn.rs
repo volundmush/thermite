@@ -15,9 +15,10 @@ use tokio_rustls::{
     server::TlsStream
 };
 
-use thermite_lib::{
+use crate::{
     telnet::TelnetProtocol,
-    websocket::WebSocketProtocol
+    websocket::WebSocketProtocol,
+    random_alphanum
 };
 
 
@@ -26,13 +27,21 @@ pub enum ProtocolType {
     WebSocket
 }
 
+
+pub enum Msg2Protocol {
+    Kill,
+    Disconnect(Option<string>),
+    Ready(Sender<Msg2Session>)
+}
+
+
 pub enum Msg2Listener {
     Kill
 }
 
+
 pub struct Listener {
     pub listen_id: String,
-    pub listen_type: ProtocolType,
     pub listener: TcpListener,
     pub addr: SocketAddr,
     pub protocol: ProtocolType,
@@ -47,14 +56,13 @@ impl Listener {
         let (tx_listener, rx_listener) = channel(50);
         Self {
             listen_id,
-            listen_type: protocol,
             tx_portal,
+            protocol,
             tls_acceptor,
             listener,
             addr,
-            protocol,
             tx_listener,
-            rx_listener
+            rx_listener,
         }
     }
 
@@ -120,12 +128,16 @@ pub struct ConnectionLink {
 }
 
 impl ConnectionLink {
-    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static, addr: SocketAddr, tls: bool, tx_portal: Sender<Ms2Portal>, protocol: ProtocolType) -> Self {
+    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static,
+               addr: SocketAddr, tls: bool, tx_portal: Sender<Ms2Portal>, protocol: ProtocolType,
+               tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
         let (tx_protocol, rx_protocol) = channel(50);
 
         match protocol {
             ProtocolType::Telnet => {
-                let mut tel_prot = TelnetProtocol::new(conn_id.clone(), conn, addr.clone(), tls, rx_protocol, tx_portal.clone());
+                let mut tel_prot = TelnetProtocol::new(conn_id.clone(),
+                                                       conn, addr.clone(), tls, rx_protocol,
+                                                       tx_portal.clone(), tx_sessmanager);
                 let handle = tokio::spawn(async move {protocol.run().await;});
             },
             ProtocolType::WebSocket => {
@@ -142,6 +154,27 @@ impl ConnectionLink {
     }
 }
 
+pub struct ClientInfo {
+    pub conn_id: String,
+    pub addr: SocketAddr,
+    pub tls: bool,
+    pub protocol: ProtocolType,
+    pub tx_protocol: Sender<Msg2Protocol>
+}
+
+
+pub struct ClientCapabilities {
+    pub text: bool,
+    pub utf8: bool,
+    pub html: bool,
+    pub mxp: bool,
+    pub data: bool,
+    pub ansi: bool,
+    pub xterm256: bool,
+    pub width: u16,
+    pub height: u16,
+    pub screen_reader: bool
+}
 
 
 pub enum Msg2Portal {
@@ -156,27 +189,36 @@ pub struct Portal {
     connections: HashMap<String, ConnectionLink>,
     pub tx_portal: Sender<Msg2Portal>,
     rx_portal: Receiver<Msg2Portal>,
-}
-
-impl Default for Portal {
-    fn default() -> Self {
-        let (tx_portal, rx_portal) = channel(50);
-        Self {
-            listeners: HashMap::default(),
-            connections: HashMap::default(),
-            tx_portal,
-            rx_portal
-        }
-    }
+    tx_sessmanager: Sender<Msg2SessionManager>
 }
 
 impl Portal {
+
+    pub fn new(tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
+        let (tx_portal, rx_portal) = channel(50);
+        Self {
+            listeners: Default::default(),
+            connections: Default::default(),
+            tx_portal,
+            rx_portal,
+            tx_sessmanager
+        }
+    }
+
     pub async fn run(&mut self) {
         loop {
             if let Some(msg) = self.rx_portal.recv().await {
                 match msg {
                     Msg2Portal::Kill => {
                         // This should full stop all listeners and clients and tasks then end this tasks.
+                        for (k, v) in self.listeners.iter_mut() {
+                            v.tx_listener.send(Msg2Listener::Kill).await;
+                            &v.handle.await;
+                        }
+                        for (k, v) in self.connections.iter_mut() {
+                            v.tx_protocol.send(Msg2Portal::Kill).await;
+                            &v.handle.await;
+                        }
                         break;
                     },
                     Msg2Portal::DisconnectClient(conn_id, reason) => {
@@ -187,7 +229,7 @@ impl Portal {
                     },
                     Msg2Portal::NewTlsConnection(stream, addr, protocol) => {
                         self.accept(stream, addr, true, protocol);
-                    }
+                    },
                 }
             }
         }
@@ -199,10 +241,16 @@ impl Portal {
         }
         let addr = listener.local_addr().unwrap();
 
+        let mut tls_bool = false;
+        if let Some(tls_check) = &tls {
+            tls_bool = true;
+        }
+
         let mut listener = Listener::new(listener, addr.clone(), tls, listen_id.clone(), self.tx_portal.clone(), protocol.clone());
         let tx_listener = listener.tx_listener.clone();
 
         let handle = tokio::spawn(async move {listener.run().await});
+
 
         let mut listen_stub = ListenerLink {
             addr,
@@ -210,14 +258,14 @@ impl Portal {
             listen_type: protocol,
             handle,
             tx_listener,
-            tls
+            tls: tls_bool
         };
         self.listeners.insert(listen_id, listen_stub);
     }
 
     fn accept(&mut self, conn: impl AsyncRead + AsyncWrite + Send + 'static, addr: SocketAddr, tls: bool, protocol: ProtocolType) {
         let new_id = self.generate_id();
-        let conn_data = ConnectionLink::new(new_id.clone(), conn, addr, tls, self.tx_portal.clone(), protocol);
+        let conn_data = ConnectionLink::new(new_id.clone(), conn, addr, tls, self.tx_portal.clone(), protocol, self.tx_sessmanager.clone());
         self.connections.insert(new_id, conn_data);
     }
 
@@ -229,4 +277,18 @@ impl Portal {
             }
         }
     }
+}
+
+// Thermite lib does not actually implement a Session Manager. Just the means by which protocols can
+// communicate with a SessionManager and Sessions.
+pub enum Msg2SessionManager {
+    Kill,
+    ClientReady(String, ClientInfo, ClientCapabilities)
+}
+
+pub enum Msg2Session {
+    Kill,
+    ClientCommand(String),
+    ClientDisconnected(Option<String>),
+    ClientCapabilities(ClientCapabilities)
 }

@@ -7,6 +7,8 @@ use rand::{
 use std::iter;
 
 pub mod conn;
+pub mod telnet;
+pub mod websocket;
 
 pub fn random_alphanum(length: usize) -> String {
     let mut rng = thread_rng();

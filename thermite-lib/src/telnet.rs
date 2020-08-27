@@ -29,6 +29,14 @@ use futures::{
     stream::{Stream, StreamExt}
 };
 
+use crate::conn::{
+    Msg2Portal,
+    Msg2SessionManager,
+    Msg2Protocol,
+    Msg2Session,
+    ClientInfo, ClientCapabilities
+};
+
 pub mod tc {
     pub const NULL: u8 = 0;
     pub const BEL: u8 = 7;
@@ -59,6 +67,7 @@ pub mod tc {
 
     // Compression
     // pub const MCCP1: u8 = 85 - this is deprecrated
+    // NOTE: MCCP2 and MCCP3 is currently disabled.
     pub const MCCP2: u8 = 86;
     pub const MCCP3: u8 = 87;
 
@@ -113,8 +122,8 @@ pub struct TelnetCodec {
     app_data: Vec<u8>,
     line_mode: bool,
     state: TelnetState,
-    mccp2: bool,
-    mccp3: bool
+    //mccp2: bool,
+    //mccp3: bool
 }
 
 pub enum SubState {
@@ -129,47 +138,8 @@ impl TelnetCodec {
             sub_data: Vec::with_capacity(1024),
             line_mode,
             state: TelnetState::Data,
-            mccp2: false,
-            mccp3: false
-        }
-    }
-
-    fn try_parse_iac(&mut self, bytes: &[u8]) -> (IacSection, usize) {
-        if bytes.len() < 2 {
-            return (IacSection::Pending, 0);
-        };
-
-        if bytes[1] == tc::IAC {
-            // Received IAC IAC which is an escape sequence for IAC / 255.
-            return (IacSection::IAC, 2);
-        }
-
-        match bytes[1] {
-            tc::IAC => (IacSection::IAC, 2),
-            tc::SE => {
-                // This is the only way to ensure the next decode() is decompressed without
-                // waiting for the Protocol to acknowledge it.
-                match self.state {
-                    TelnetState::Sub(op) => {
-                        if op == tc::MCCP3 {
-                            self.mccp3 = true;
-                        }
-                    },
-                    _ => {}
-                }
-                return (IacSection::SE, 2);
-            },
-            tc::WILL | tc::WONT | tc::DO | tc::DONT | tc::SB => {
-                if bytes.len() < 3 {
-                    // No further IAC sequences are valid without at least 3 bytes so...
-                    return (IacSection::Pending, 0);
-                }
-                return (IacSection::Command((bytes[1], bytes[2])), 3);
-            }
-            _ => {
-                // Still working on this part. Got more commands to enable...
-                return (IacSection::Error, 0)
-            }
+            //mccp2: false,
+            //mccp3: false
         }
     }
 }
@@ -227,7 +197,7 @@ impl Decoder for TelnetCodec {
                                 // MCCP3 must be enabled on the encoder immediately after receiving
                                 // an IAC SB MCCP3 IAC SE.
                                 if op == tc::MCCP3 {
-                                    self.mccp3 = true;
+                                    //self.mccp3 = true;
                                 }
                                 return Ok(Some(msg));
                             },
@@ -307,7 +277,7 @@ impl Encoder<TelnetSend> for TelnetCodec {
                 // Compression must be enabled immediately after
                 // IAC SB MCCP2 IAC SE is sent.
                 if op == tc::MCCP2 {
-                    self.mccp2 = true;
+                    //self.mccp2 = true;
                 }
             },
             TelnetSend::RawBytes(data) => {
@@ -367,7 +337,8 @@ pub struct TelnetConfig {
     pub linemode: bool,
     pub force_endline: bool,
     pub oob: bool,
-    pub tls: bool
+    pub tls: bool,
+    pub screen_reader: bool
 }
 
 impl Default for TelnetConfig {
@@ -391,7 +362,25 @@ impl Default for TelnetConfig {
             linemode: false,
             force_endline: false,
             oob: false,
-            tls: false
+            tls: false,
+            screen_reader: false
+        }
+    }
+}
+
+impl TelnetConfiog {
+    pub fn capabilities(&self) -> ClientCapabilities {
+        ClientCapabilities {
+            text: true,
+            utf8: self.utf8,
+            html: false,
+            mxp: self.mxp,
+            data: self.gmcp || self.msdp,
+            ansi: self.ansi,
+            xterm256: self.xterm256,
+            width: self.width,
+            height: self.height,
+            screen_reader: self.screen_reader
         }
     }
 }
@@ -403,34 +392,38 @@ pub struct TelnetProtocol<T> {
     conn_id: String,
     handshakes_left: u8,
     ttype_handshakes: u8,
-    read: FramedRead<T, TelnetCodec>,
-    write: FramedWrite<T, TelnetCodec>,
+    conn: Framed<T, TelnetCodec>,
     ttype_first: Option<Vec<u8>>,
     tx_protocol: Sender<Msg2Protocol>,
-    rx_protocol: Receiver<Msg2Protocol>
+    rx_protocol: Receiver<Msg2Protocol>,
+    tx_portal: Sender<Msg2Portal>,
+    tx_sessmanager: Sender<Msg2SessionManager>,
+    tx_session: Option<Sender<Msg2Session>>
 }
 
 impl<T> TelnetProtocol<T> where 
     T: AsyncRead + AsyncWrite + Send + 'static
 {
-    pub fn new(conn_id: String, conn: T, addr: SocketAddr, tls: bool, rx_protocol: Receiver<Msg2Protocol>, tx_portal: Sender<Msg2Portal>) -> Self {
+    pub fn new(conn_id: String, conn: T, addr: SocketAddr, tls: bool,
+               rx_protocol: Receiver<Msg2Protocol>, tx_portal: Sender<Msg2Portal>,
+               tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
 
         let telnet_codec = Framed::new(conn, TelnetCodec::new(true));
-        let (write, read) = telnet_codec.split();
 
-        let mut prot = TelnetProtocol {
+        let mut prot = Self {
             conn_id,
-            tx_server,
+            tx_portal,
             op_state: Default::default(),
             enabled: false,
             config: TelnetConfig::default(),
             tx_protocol,
             rx_protocol,
-            write,
-            read,
+            conn: telnet_codec,
             handshakes_left: 0,
             ttype_handshakes: 0,
-            ttype_first: None
+            ttype_first: None,
+            tx_sessmanager,
+            tx_session: None
         };
 
         // Create Handlers for options...
@@ -442,8 +435,8 @@ impl<T> TelnetProtocol<T> where
             (tc::TTYPE, false, true, 1),
             (tc::MXP, true, false, 1),
             (tc::MSSP, true, false, 1),
-            (tc::MCCP2, true, false, 1),
-            (tc::MCCP3, true, false, 1),
+            //(tc::MCCP2, true, false, 1),
+            //(tc::MCCP3, true, false, 1),
             (tc::GMCP, true, false, 1),
             (tc::MSDP, true, false, 1),
             (tc::LINEMODE, false, true, 1),
@@ -477,11 +470,11 @@ impl<T> TelnetProtocol<T> where
             }
         }
         // Just packing all of this together so it gets sent at once.
-        self.write.send(TelnetSend::RawBytes(raw_bytes)).await;
+        self.conn.send(TelnetSend::RawBytes(raw_bytes)).await;
 
         loop {
             tokio::select! {
-                t_msg = self.read.next() => {
+                t_msg = self.conn.next() => {
                     if let Some(msg) = t_msg {
                         match msg {
                             TelnetReceive::Data(b) => {
@@ -516,11 +509,11 @@ impl<T> TelnetProtocol<T> where
     }
 
     async fn send_iac_command(&mut self, command: u8, op: u8) {
-        self.write.send(TelnetSend::Command((command, op))).await;
+        self.conn.send(TelnetSend::Command((command, op))).await;
     }
 
     async fn send_sub_data(&mut self, op: u8, data: Vec<u8>) {
-        self.write.send(TelnetSend::Sub((op, data))).await;
+        self.conn.send(TelnetSend::Sub((op, data))).await;
     }
 
     async fn iac_receive(&mut self, command: u8, op: u8) {
@@ -625,6 +618,7 @@ impl<T> TelnetProtocol<T> where
             tc::SGA => {
                 self.config.sga = true;
             },
+            // This won't actually happen right now as MCCP2 is disabled.
             tc::MCCP2 => {
                 self.config.mccp2 = true;
                 self.send_empty_sub(tc::MCCP2).await;
@@ -664,8 +658,14 @@ impl<T> TelnetProtocol<T> where
     async fn receive_line(&mut self, data: Vec<u8>) {
         // This is a line that has already been determined to end in CRLF.
         // This can be directly converted to text.
-        let text = String::from_utf8_lossy(data.as_slice());
-        println!("{}", text);
+        let data = String::from_utf8(data);
+        if let Ok(text) = data {
+            // Only if we can decode this text, and only if we have a linked session, do we pass the
+            // text on.
+            if let Some(mut chan) = &self.tx_session {
+                chan.send(Msg2Session::ClientCommand(self.conn_id.clone(), text)).await;
+            }
+        }
     }
 
     async fn receive_data(&mut self, data: u8) {
