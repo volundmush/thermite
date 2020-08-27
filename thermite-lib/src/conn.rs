@@ -22,6 +22,7 @@ use crate::{
 };
 
 
+#[derive(Clone)]
 pub enum ProtocolType {
     Telnet,
     WebSocket
@@ -30,7 +31,7 @@ pub enum ProtocolType {
 
 pub enum Msg2Protocol {
     Kill,
-    Disconnect(Option<string>),
+    Disconnect(Option<String>),
     Ready(Sender<Msg2Session>)
 }
 
@@ -128,32 +129,46 @@ pub struct ConnectionLink {
 }
 
 impl ConnectionLink {
-    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static,
-               addr: SocketAddr, tls: bool, tx_portal: Sender<Ms2Portal>, protocol: ProtocolType,
+    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin,
+               addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>, protocol: ProtocolType,
                tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
         let (tx_protocol, rx_protocol) = channel(50);
 
         match protocol {
             ProtocolType::Telnet => {
                 let mut tel_prot = TelnetProtocol::new(conn_id.clone(),
-                                                       conn, addr.clone(), tls, rx_protocol,
+                                                       conn, addr.clone(), tls, tx_protocol.clone(), rx_protocol,
                                                        tx_portal.clone(), tx_sessmanager);
-                let handle = tokio::spawn(async move {protocol.run().await;});
+                let handle = tokio::spawn(async move {tel_prot.run().await;});
+
+                Self {
+                    addr,
+                    conn_id,
+                    protocol,
+                    handle,
+                    tx_protocol
+                }
+
             },
             ProtocolType::WebSocket => {
-                // Will fix this up later...
+                let mut web_prot = WebSocketProtocol {};
+                let handle = tokio::spawn(async move {web_prot.run().await});
+
+                Self {
+                    addr,
+                    conn_id,
+                    protocol,
+                    handle,
+                    tx_protocol
+                }
+
             }
         }
-        Self {
-            addr,
-            conn_id,
-            protocol,
-            handle,
-            tx_protocol
-        }        
+
     }
 }
 
+#[derive(Clone)]
 pub struct ClientInfo {
     pub conn_id: String,
     pub addr: SocketAddr,
@@ -162,7 +177,7 @@ pub struct ClientInfo {
     pub tx_protocol: Sender<Msg2Protocol>
 }
 
-
+#[derive(Clone)]
 pub struct ClientCapabilities {
     pub text: bool,
     pub utf8: bool,
@@ -213,11 +228,9 @@ impl Portal {
                         // This should full stop all listeners and clients and tasks then end this tasks.
                         for (k, v) in self.listeners.iter_mut() {
                             v.tx_listener.send(Msg2Listener::Kill).await;
-                            &v.handle.await;
                         }
                         for (k, v) in self.connections.iter_mut() {
-                            v.tx_protocol.send(Msg2Portal::Kill).await;
-                            &v.handle.await;
+                            v.tx_protocol.send(Msg2Protocol::Kill).await;
                         }
                         break;
                     },
@@ -263,7 +276,7 @@ impl Portal {
         self.listeners.insert(listen_id, listen_stub);
     }
 
-    fn accept(&mut self, conn: impl AsyncRead + AsyncWrite + Send + 'static, addr: SocketAddr, tls: bool, protocol: ProtocolType) {
+    fn accept(&mut self, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin, addr: SocketAddr, tls: bool, protocol: ProtocolType) {
         let new_id = self.generate_id();
         let conn_data = ConnectionLink::new(new_id.clone(), conn, addr, tls, self.tx_portal.clone(), protocol, self.tx_sessmanager.clone());
         self.connections.insert(new_id, conn_data);
@@ -283,7 +296,8 @@ impl Portal {
 // communicate with a SessionManager and Sessions.
 pub enum Msg2SessionManager {
     Kill,
-    ClientReady(String, ClientInfo, ClientCapabilities)
+    ClientReady(String, ClientInfo, ClientCapabilities),
+    ClientDisconnected(Option<String>),
 }
 
 pub enum Msg2Session {

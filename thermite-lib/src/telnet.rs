@@ -122,8 +122,8 @@ pub struct TelnetCodec {
     app_data: Vec<u8>,
     line_mode: bool,
     state: TelnetState,
-    //mccp2: bool,
-    //mccp3: bool
+    mccp2: bool,
+    mccp3: bool
 }
 
 pub enum SubState {
@@ -138,8 +138,49 @@ impl TelnetCodec {
             sub_data: Vec::with_capacity(1024),
             line_mode,
             state: TelnetState::Data,
-            //mccp2: false,
-            //mccp3: false
+            mccp2: false,
+            mccp3: false
+        }
+    }
+}
+
+impl TelnetCodec {
+    fn try_parse_iac(&mut self, bytes: &[u8]) -> (IacSection, usize) {
+        if bytes.len() < 2 {
+            return (IacSection::Pending, 0);
+        };
+
+        if bytes[1] == tc::IAC {
+            // Received IAC IAC which is an escape sequence for IAC / 255.
+            return (IacSection::IAC, 2);
+        }
+
+        match bytes[1] {
+            tc::IAC => (IacSection::IAC, 2),
+            tc::SE => {
+                // This is the only way to ensure the next decode() is decompressed without
+                // waiting for the Protocol to acknowledge it.
+                match self.state {
+                    TelnetState::Sub(op) => {
+                        if op == tc::MCCP3 {
+                            self.mccp3 = true;
+                        }
+                    },
+                    _ => {}
+                }
+                return (IacSection::SE, 2);
+            },
+            tc::WILL | tc::WONT | tc::DO | tc::DONT | tc::SB => {
+                if bytes.len() < 3 {
+                    // No further IAC sequences are valid without at least 3 bytes so...
+                    return (IacSection::Pending, 0);
+                }
+                return (IacSection::Command((bytes[1], bytes[2])), 3);
+            }
+            _ => {
+                // Still working on this part. Got more commands to enable...
+                return (IacSection::Error, 0)
+            }
         }
     }
 }
@@ -368,7 +409,7 @@ impl Default for TelnetConfig {
     }
 }
 
-impl TelnetConfiog {
+impl TelnetConfig {
     pub fn capabilities(&self) -> ClientCapabilities {
         ClientCapabilities {
             text: true,
@@ -402,9 +443,9 @@ pub struct TelnetProtocol<T> {
 }
 
 impl<T> TelnetProtocol<T> where 
-    T: AsyncRead + AsyncWrite + Send + 'static
+    T: AsyncRead + AsyncWrite + Send + 'static + Unpin
 {
-    pub fn new(conn_id: String, conn: T, addr: SocketAddr, tls: bool,
+    pub fn new(conn_id: String, conn: T, addr: SocketAddr, tls: bool, tx_protocol: Sender<Msg2Protocol>,
                rx_protocol: Receiver<Msg2Protocol>, tx_portal: Sender<Msg2Portal>,
                tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
 
@@ -476,21 +517,22 @@ impl<T> TelnetProtocol<T> where
             tokio::select! {
                 t_msg = self.conn.next() => {
                     if let Some(msg) = t_msg {
-                        match msg {
-                            TelnetReceive::Data(b) => {
-                                self.receive_data(b).await;
-                            },
-                            TelnetReceive::Line(bytes) => {
-                                self.receive_line(bytes).await;
-                            },
-                            TelnetReceive::Sub((op, data)) => {
-                                self.receive_sub(op, data).await;
-                            },
-                            TelnetReceive::Will(op) => self.iac_receive(tc::WILL, op).await,
-                            TelnetReceive::Wont(op) => self.iac_receive(tc::WONT, op).await,
-                            TelnetReceive::Do(op) => self.iac_receive(tc::DO, op).await,
-                            TelnetReceive::Dont(op) => self.iac_receive(tc::DONT, op).await,
-
+                        if let Ok(msg) = msg {
+                            match msg {
+                                TelnetReceive::Data(b) => {
+                                    self.receive_data(b).await;
+                                },
+                                TelnetReceive::Line(bytes) => {
+                                    self.receive_line(bytes).await;
+                                },
+                                TelnetReceive::Sub((op, data)) => {
+                                    self.receive_sub(op, data).await;
+                                },
+                                TelnetReceive::Will(op) => self.iac_receive(tc::WILL, op).await,
+                                TelnetReceive::Wont(op) => self.iac_receive(tc::WONT, op).await,
+                                TelnetReceive::Do(op) => self.iac_receive(tc::DO, op).await,
+                                TelnetReceive::Dont(op) => self.iac_receive(tc::DONT, op).await,
+                            }
                         }
                     }
                 },
@@ -498,7 +540,13 @@ impl<T> TelnetProtocol<T> where
                     if let Some(msg) = p_msg {
                         match msg {
                             Msg2Protocol::Kill => {
-
+                                break;
+                            },
+                            Msg2Protocol::Disconnect(reason) => {
+                                break;
+                            },
+                            Msg2Protocol::Ready(chan) => {
+                                self.tx_session = Some(chan);
                             }
                         }
                     }
@@ -662,8 +710,9 @@ impl<T> TelnetProtocol<T> where
         if let Ok(text) = data {
             // Only if we can decode this text, and only if we have a linked session, do we pass the
             // text on.
-            if let Some(mut chan) = &self.tx_session {
-                chan.send(Msg2Session::ClientCommand(self.conn_id.clone(), text)).await;
+            let maybe_chan = self.tx_session.clone();
+            if let Some(mut chan) = maybe_chan {
+                chan.send(Msg2Session::ClientCommand(text)).await;
             }
         }
     }
@@ -678,7 +727,7 @@ impl<T> TelnetProtocol<T> where
     }
 
     async fn request_ttype(&mut self) {
-        let mut data: Vec<u8> = vec![1];
+        let data: Vec<u8> = vec![1];
         self.send_sub_data(tc::TTYPE, data);
     }
 

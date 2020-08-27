@@ -50,11 +50,12 @@ impl Session {
                         self.update_capabilities(capabilities).await;
                     },
                     Msg2Session::ClientDisconnected(reason) => {
-                        if let Some(reason) = reason {
-                            println!("Session {} disconnected for reason: {}", self.conn_id, reason);
-                            self.tx_sessmanager.send(Msg2SessionManager::ClientDisconnected(self.conn_id.clone())).await;
-                            break;
+                        let reason_copy = reason.clone();
+                        if let Some(reason_2) = reason_copy {
+                            println!("Session {} disconnected for reason: {}", self.conn_id, reason_2);
                         }
+                        self.tx_sessmanager.send(Msg2SessionManager::ClientDisconnected(Some(self.conn_id.clone()))).await;
+                        break;
                     },
                     Msg2Session::ClientCommand(command) => {
                         println!("Session {} received command from protocol: {}", self.conn_id, command);
@@ -64,7 +65,7 @@ impl Session {
         }
     }
 
-    fn update_capabilities(&mut self, capabilities: ClientCapabilities) {
+    async fn update_capabilities(&mut self, capabilities: ClientCapabilities) {
 
     }
 }
@@ -105,12 +106,17 @@ impl SessionLink {
 pub struct SessionManager {
     sessions: HashMap<String, SessionLink>,
     rx_sessmanager: Receiver<Msg2SessionManager>,
-    tx_sessmanager: Sender<Msg2SessionManager>
+    pub tx_sessmanager: Sender<Msg2SessionManager>
 }
 
 impl SessionManager {
     pub fn new() -> Self {
-
+        let (tx_sessmanager, rx_sessmanager) = channel(50);
+        Self {
+            sessions: Default::default(),
+            tx_sessmanager,
+            rx_sessmanager
+        }
     }
 
     pub async fn run(&mut self) {
@@ -124,12 +130,15 @@ impl SessionManager {
                         }
                     },
                     Msg2SessionManager::ClientReady(conn_id, info, capabilities) => {
-                        if let Ok(link) = SessionLink::new(conn_id.clone(), info, capabilities) {
+                        if let Ok(link) = SessionLink::new(conn_id.clone(), info, capabilities, self.tx_sessmanager.clone()) {
                             self.sessions.insert(conn_id, link);
                         } else {
                             // This would only happen if SessionLink rejects the connection for some
                             // reason. Such as a ban.
                         }
+                    },
+                    Msg2SessionManager::ClientDisconnected(reason) => {
+
                     }
                 }
             }

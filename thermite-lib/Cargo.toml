@@ -18,3 +18,4 @@ futures = "0.3"
 serde = "1.0"
 tungstenite = "0.11"
 tokio-tungstenite = {version = "0.11", features = ["stream"]}
+#thrussh = "0.28"

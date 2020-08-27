@@ -4,7 +4,11 @@ use diesel::{
     r2d2::{ConnectionManager, Pool}
 };
 
-use thermite_lib::telnet::{TelnetServer};
+use thermite_lib::conn::{Portal, ProtocolType};
+use thermite::session::{
+    SessionManager
+};
+
 use tokio::net::TcpListener;
 use std::{
     env,
@@ -55,13 +59,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let db_task = tokio::spawn(async move {db.run().await});
 
-    let mut telnet_server = TelnetServer::new();
-    let tx_telnet = telnet_server.tx_server.clone();
+    let mut sess_manager = SessionManager::new();
+    let tx_sessmanager = sess_manager.tx_sessmanager.clone();
 
-    for (k, v) in conf.telnet.iter() {
+    let sess_task = tokio::spawn(async move {sess_manager.run().await});
+
+    let mut portal = Portal::new(tx_sessmanager);
+    let tx_portal = portal.tx_portal.clone();
+
+    for (k, v) in conf.listeners.iter() {
         let addr = interfaces.get(&v.interface).expect("Telnet Server attempting to use non-existent interface!");
         let sock = SocketAddr::new(addr.clone(), v.port);
         let listener = TcpListener::bind(sock).await.expect("Could not bind Telnet Server port... is it in use?");
+
+        let mut protocol = ProtocolType::Telnet;
+
+
+
         if let Some(tls_key) = &v.tls {
             // Will worry about TLS later...
         } else {

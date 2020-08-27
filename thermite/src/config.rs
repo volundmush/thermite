@@ -23,6 +23,7 @@ pub struct Keys {
 #[derive(Deserialize)]
 pub struct ServerConfig {
     pub tls: Option<String>,
+    pub protocol: String,
     pub interface: String,
     pub port: u16
 }
@@ -32,7 +33,7 @@ pub struct Config {
     pub tls: HashMap<String, Keys>,
     pub interfaces: HashMap<String, String>,
     pub database: HashMap<String, String>,
-    pub telnet: HashMap<String, ServerConfig>
+    pub listeners: HashMap<String, ServerConfig>
 }
 
 impl Config {
