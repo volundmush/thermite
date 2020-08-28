@@ -54,6 +54,7 @@ pub mod tc {
     // The following are special MUD specific protocols.
 
     // MUD eXtension Protocol
+    // NOTE: Disabled due to too many issues with it.
     pub const MXP: u8 = 91;
 
     // Mud Server Status Protocol
@@ -373,7 +374,13 @@ pub struct TelnetConfig {
     pub force_endline: bool,
     pub oob: bool,
     pub tls: bool,
-    pub screen_reader: bool
+    pub screen_reader: bool,
+    pub mouse_tracking: bool,
+    pub vt100: bool,
+    pub osc_color_palette: bool,
+    pub proxy: bool,
+    pub truecolor: bool,
+    pub mnes: bool
 }
 
 impl Default for TelnetConfig {
@@ -398,7 +405,13 @@ impl Default for TelnetConfig {
             force_endline: false,
             oob: false,
             tls: false,
-            screen_reader: false
+            screen_reader: false,
+            mouse_tracking: false,
+            vt100: false,
+            osc_color_palette: false,
+            proxy: false,
+            truecolor: false,
+            mnes: false
         }
     }
 }
@@ -429,6 +442,7 @@ pub struct TelnetProtocol<T> {
     handshakes_left: HashSet<u8>,
     handshakes_left_2: HashSet<u8>,
     conn: Framed<T, TelnetCodec>,
+    started: bool,
     ttype_first: Option<Vec<u8>>,
     tx_protocol: Sender<Msg2Protocol>,
     rx_protocol: Receiver<Msg2Protocol>,
@@ -460,6 +474,7 @@ impl<T> TelnetProtocol<T> where
             handshakes_left_2: HashSet::default(),
             ttype_first: None,
             tx_sessmanager,
+            started: false,
             tx_session: None
         };
 
@@ -470,7 +485,7 @@ impl<T> TelnetProtocol<T> where
             (tc::SGA, true, false),
             (tc::NAWS, false, true),
             (tc::TTYPE, false, true),
-            (tc::MXP, true, false),
+            //(tc::MXP, true, false),
             (tc::MSSP, true, false),
             //(tc::MCCP2, true, false, 1),
             //(tc::MCCP3, true, false, 1),
@@ -551,7 +566,6 @@ impl<T> TelnetProtocol<T> where
                                 break;
                             },
                             Msg2Protocol::SessionReady(chan) => {
-                                println!("Session is linked!");
                                 self.tx_session = Some(chan);
                             },
                             Msg2Protocol::ProtocolReady => {
@@ -576,11 +590,12 @@ impl<T> TelnetProtocol<T> where
     }
 
     async fn start_session(&mut self) {
-        if self.handshakes_left.len() == 0 {
+        // This leaves _2 still ready to handle ttype in case of strange timing.
+        if self.started {
             return;
         }
-        // This leaves _2 still ready to handle ttype in case of strange timing.
         self.handshakes_left.clear();
+        self.started = true;
         self.tx_sessmanager.send(Msg2SessionManager::ClientReady(self.conn_id.clone(),
                                                                  self.client_info(),
                                                                  self.config.capabilities())).await;
@@ -759,7 +774,6 @@ impl<T> TelnetProtocol<T> where
         if let Ok(text) = data {
             // Only if we can decode this text, and only if we have a linked session, do we pass the
             // text on.
-            println!("DECODED A LINE: {}", text);
             let maybe_chan = self.tx_session.clone();
             if let Some(mut chan) = maybe_chan {
                 chan.send(Msg2Session::ClientCommand(text)).await;
@@ -785,16 +799,15 @@ impl<T> TelnetProtocol<T> where
         if !self.handshakes_left_2.contains(&252)
             && !self.handshakes_left_2.contains(&253)
             && !self.handshakes_left_2.contains(&254) {
-            // No reason to answer this anymore...
             return;
         }
-        if !data.len() > 1 {
+        if data.len() < 2 {
             // if there is no data, ignore this.
             return;
         }
         // If the first byte of data is not u8 == 1, this is not valid.
         let (is, info) = data.split_at(1);
-        if is[0] != 1 {
+        if is[0] != 0 {
             return;
         }
         let mut incoming = String::from("");
@@ -806,7 +819,7 @@ impl<T> TelnetProtocol<T> where
             return;
         }
 
-        if !incoming.len() > 0 {
+        if incoming.len() == 0 {
             // Not sure how we ended up an empty string, but not gonna allow it.
             return;
         }
@@ -819,6 +832,7 @@ impl<T> TelnetProtocol<T> where
             self.ttype_first = Some(data.clone());
             self.receive_ttype_0(incoming).await;
             self.process_handshake(252).await;
+            self.request_ttype().await;
             return;
         }
 
@@ -830,11 +844,12 @@ impl<T> TelnetProtocol<T> where
                 if first.eq(&data) {
                     // This client does not support advanced ttype. Ignore further
                     // calls to TTYPE and consider this complete.
-                    self.process_handshake(253);
-                    self.process_handshake(254);
+                    self.process_handshake(253).await;
+                    self.process_handshake(254).await;
                 } else {
                     self.receive_ttype_1(incoming).await;
-                    self.process_handshake(253);
+                    self.process_handshake(253).await;
+                    self.request_ttype().await;
                 }
             }
             return;
@@ -843,7 +858,7 @@ impl<T> TelnetProtocol<T> where
         let run_third = self.handshakes_left_2.contains(&254);
         if run_third {
             self.receive_ttype_2(incoming).await;
-            self.process_handshake(254);
+            self.process_handshake(254).await;
         }
     }
 
@@ -920,13 +935,42 @@ impl<T> TelnetProtocol<T> where
         if !data.starts_with("MTTS ") {
             return;
         }
-        let results: Vec<&str> = data.splitn(1, " ").collect();
+        let results: Vec<&str> = data.splitn(2, " ").collect();
         let value = String::from(results[1]);
         let mtts: usize = value.parse().unwrap_or(0);
-        if mtts > 0 {
+        if mtts == 0 {
             return;
         }
-
+        if (1 & mtts) == 1 {
+            self.config.ansi = true;
+        }
+        if (2 & mtts) == 2 {
+            self.config.vt100 = true;
+        }
+        if (4 & mtts) == 4 {
+            self.config.utf8 = true;
+        }
+        if (8 & mtts) == 8 {
+            self.config.xterm256 = true;
+        }
+        if (16 & mtts) == 16 {
+            self.config.mouse_tracking = true;
+        }
+        if (32 & mtts) == 32 {
+            self.config.osc_color_palette = true;
+        }
+        if (64 & mtts) == 64 {
+            self.config.screen_reader = true;
+        }
+        if (128 & mtts) == 128 {
+            self.config.proxy = true;
+        }
+        if (256 & mtts == 256) {
+            self.config.truecolor = true;
+        }
+        if (512 & mtts == 512) {
+            self.config.mnes = true;
+        }
     }
 
     async fn receive_ttype_basic(&mut self) {
@@ -940,8 +984,8 @@ impl<T> TelnetProtocol<T> where
             return;
         }
         let (width, height) = data.split_at(2);
-        let width = u16::from_le_bytes(width.try_into().unwrap());
-        let height = u16::from_le_bytes(height.try_into().unwrap());
+        let width = u16::from_be_bytes(width.try_into().unwrap());
+        let height = u16::from_be_bytes(height.try_into().unwrap());
         self.config.width = width;
         self.config.height = height;
     }
