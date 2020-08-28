@@ -5,48 +5,166 @@ use std::{
     collections::HashMap
 };
 
+pub const ESC: &str = "\x1b";
+
+#[derive(Debug, PartialEq)]
+pub enum ColorCode {
+    Ansi(u8),
+    Xterm(u8)
+}
+
+//rgybmcwx 
+fn parse_ansi_color(src: &str) -> usize {
+    match src {
+        "x" => {
+            30
+        },
+        "r" => {
+            31
+        },
+        "g" => {
+            32
+        },
+        "y" => {
+            33
+        },
+        "b" => {
+            34
+        },
+        "m" => {
+            35
+        },
+        "c" => {
+            36
+        },
+        "w" => {
+            37
+        },
+        _ => {
+            0
+        }
+    }
+}
+
+fn parse_ansi_bg_color(src: &str) -> usize {
+    let res = parse_ansi_color(&src.to_lowercase());
+    if res > 0 {
+        res + 10
+    }
+    else {
+        0
+    }
+}
+
+fn parse_xterm_color(src: &str) -> usize {
+
+}
+
 fn getstr(lex: &mut Lexer<Token>) -> Option<String> {
     Some(String::from(lex.slice()))
+}
+
+fn get_ansi_basic_fg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
+    let found = String::from(lex.slice());
+    let result = parse_ansi_bg_color(&found[1..].to_lowercase());
+    if result > 0 {
+        Some(ColorCode::Ansi(result))
+    }
+    else {
+        None
+    }
+}
+
+fn get_ansi_basic_bg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
+    let found = String::from(lex.slice());
+    let result = parse_ansi_color(&found[2..].to_lowercase());
+    if result > 0 {
+        Some(ColorCode::Ansi(result))
+    }
+    else {
+        None
+    }
+}
+
+fn get_xterm_hibg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
+
+}
+
+fn get_xterm_fg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
+
+}
+
+fn get_xterm_bg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
+
+}
+
+fn get_xgrey_fg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
+
+}
+
+fn get_xgrey_bg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
+
 }
 
 
 #[derive(Logos, Debug, PartialEq)]
 pub enum Token {
-    #[regex("\\|n", getstr)]
-    AnsiReset(String),
+    #[token("||")]
+    Pipe,
 
-    #[regex("\\|[urgybmcwxRGYBMCWXhH]", getstr)]
-    AnsiFg(String),
+    #[token("|n")]
+    AnsiReset,
 
-    #[regex("\\|[\\\\/\\-_\\*\\^]", getstr)]
-    AnsiCode(String),
+    #[token("|h")]
+    AnsiHilite,
 
-    #[regex("\\|![RGYBMCWX]", getstr)]
-    AnsiHilite(String),
+    #[token("|H")]
+    AnsiUnhilite,
 
-    #[regex("\\|\\[[RGYBMCWX]", getstr)]
-    AnsiBg(String),
+    #[token("|/")]
+    AnsiCrlf,
 
-    #[regex("\\|\\[[rgybmcwx]", getstr)]
-    XtermHiBg(String),
+    #[token("|-")]
+    AnsiTab,
 
-    #[regex("\\|([0-5])([0-5])([0-5])", getstr)]
-    XtermFgNum(String),
+    #[token("|*")]
+    AnsiInverse,
 
-    #[regex("\\|\\[([0-5])([0-5])([0-5])", getstr)]
-    XtermBgNum(String),
+    #[token("|^")]
+    AnsiBlink,
 
-    #[regex("\\|=([a-z])", getstr)]
-    XtermGfgAz(String),
+    #[token("|_")]
+    AnsiSpace,
 
-    #[regex("\\|\\[=([a-z])", getstr)]
-    XtermGbgAz(String),
+    #[token("|u")]
+    AnsiUnderline,
 
     #[token(" ")]
     Space,
 
-    #[token("||")]
-    Pipe,
+    #[regex("\\|[RGYBMCWX]", get_ansi_basic_fg)]
+    AnsiUnFg(ColorCode),
+
+    #[regex("\\|[rgybmcwx]", get_ansi_basic_fg)]
+    AnsiHiFg(ColorCode),
+
+    #[regex("\\|\\[[RGYBMCWX]", get_ansi_basic_bg)]
+    AnsiUnBg(ColorCode),
+
+    #[regex("\\|\\[[rgybmcwx]", get_xterm_hibg)]
+    XtermHiBg(ColorCode),
+
+    #[regex("\\|([0-5])([0-5])([0-5])", get_xterm_fg)]
+    XtermFgNum(ColorCode),
+
+    #[regex("\\|\\[([0-5])([0-5])([0-5])", get_xterm_bg)]
+    XtermBgNum(ColorCode),
+
+    #[regex("\\|=([a-z])", get_xgrey_fg)]
+    XtermGreyFg(ColorCode),
+
+    #[regex("\\|\\[=([a-z])", get_xgrey_bg)]
+    XtermGreyBg(ColorCode),
 
     #[regex("[^\\s\\|]+", getstr)]
     Word(String),
@@ -55,71 +173,66 @@ pub enum Token {
     Error
 }
 
-pub enum AnsiToken {
-    AnsiCode(String),
-    AnsiReset,
+#[derive(Debug)]
+pub enum AnsiPiece {
     Word(String),
-    CRLF,
-    Tab,
+    Beep,
     Space,
-    Error
+    Crlf,
+    Tab
 }
 
-impl FromStr for AnsiToken {
-    type Err = ();
+// This struct represents a segment of text wrapped by ANSI encoding.
+#[derive(Debug)]
+pub struct AnsiSpan {
+    fg: Option<ColorCode>,
+    bg: Option<ColorCode>,
+    hilite: bool,
+    underline: bool,
+    flash: bool,
+    tokens: Vec<AnsiPiece>,
+    clean_string: String,
+    length: usize
+}
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let raw_string = String::from(s);
-        let out = Self::from(raw_string);
-        Ok(out)
+impl Default for AnsiSpan {
+    fn default() -> Self {
+        Self {
+            fg: None,
+            bg: None,
+            hilite: false,
+            underline: false,
+            flash: false,
+            tokens: Default::default(),
+            clean_string: Default::default(),
+            length: 0
+        }
     }
 }
 
-impl From<String> for AnsiToken {
-    fn from(src: String) -> Self {
-
-        if src.len() < 2 {
-            return Self::Error;
+impl AnsiSpan {
+    pub fn child(&self) -> Self {
+        Self {
+            fg: self.fg,
+            bg: self.bg,
+            hilite: self.hilite,
+            underline: self.underline,
+            flash: self.flash,
+            tokens: Default::default(),
+            clean_string: Default::default(),
+            length: 0
         }
+    }
 
-        if &src == "|n" {
-            return Self::AnsiReset;
-        }
-
-        if &src == "|\\" {
-            return Self::CRLF;
-        }
-
-        if &src == "|-" {
-            return Self::Tab;
-        }
-
-        if &src == "|*" {
-            //return Self::Blink;
-        }
-
-        if &src == "|u" {
-            // return Self::Underline;
-        }
-
-        if src.starts_with("|!") {
-
-        }
-
-        if src.starts_with("|[") {
-
-        }
-
-        Self::Word(src)
+    pub fn len(&self) -> usize {
+        0
     }
 }
 
 pub struct ANSIString {
-    clean_string: String,
     raw_string: String,
-    ansi_string: String,
-    tokens: Vec<(Token, Span)>,
-    ansi_tokens: Vec<AnsiToken>
+    spans: Vec<AnsiSpan>,
+    length: usize
 }
 
 impl FromStr for ANSIString {
@@ -137,37 +250,13 @@ impl From<String> for ANSIString {
         let clo = src.clone();
         let lexer = Token::lexer(&clo);
 
-        let tokens: Vec<(Token, Span)> = lexer.spanned().collect();
-        let mut atokens: Vec<AnsiToken> = Vec::with_capacity(tokens.len());
-
-        let mut clean = String::new();
-        let mut ansi = String::new();
-        for (tok, span) in tokens.iter() {
-            match tok {
-                Token::Space => {
-                    clean.push_str(" ");
-                    ansi.push_str(" ");
-                },
-                Token::Word(val) => {
-                    clean.push_str(&val);
-                    ansi.push_str(&val);
-                },
-                Token::Pipe => {
-                    clean.push_str("|");
-                    ansi.push_str("|");
-                }
-                _ => {
-
-                }
-            }
-        }
-
+        
+        let (spans, length) = ANSIString::do_lex(&lexer);
 
         Self {
-            ansi_string: None,
-            clean_string: None,
             raw_string: src,
-            tokens
+            spans,
+            length
         }
     }
 }
@@ -178,6 +267,25 @@ impl ANSIString {
     }
 
     pub fn plain(&self) -> String {
-        return self.clean_string.clone();
+        //return self.clean_string.clone();
+    }
+
+    fn do_lex(lex: Lexer<Token>) -> (Vec<AnsiSpan>, usize) {
+        let mut spans: Vec<AnsiSpan> = Default::default();
+        let mut span = AnsiSpan::default();
+        let mut length: usize = 0;
+    
+        for (tok, span) in lex.spanned() {
+            match tok {
+                Token::AnsiUnFg(val) => {
+    
+                },
+                Token::AnsiHiFg(val) => {
+    
+                }
+            }
+        }
+    
+        (spans, length)
     }
 }
