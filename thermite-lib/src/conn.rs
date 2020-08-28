@@ -32,7 +32,8 @@ pub enum ProtocolType {
 pub enum Msg2Protocol {
     Kill,
     Disconnect(Option<String>),
-    Ready(Sender<Msg2Session>)
+    ProtocolReady,
+    SessionReady(Sender<Msg2Session>)
 }
 
 
@@ -100,7 +101,7 @@ impl Listener {
                                 }
                             }
                         },
-                        Err(e) => {
+                        Err(_e) => {
 
                         }
                     }
@@ -129,7 +130,7 @@ pub struct ConnectionLink {
 }
 
 impl ConnectionLink {
-    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin,
+    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync,
                addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>, protocol: ProtocolType,
                tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
         let (tx_protocol, rx_protocol) = channel(50);
@@ -202,15 +203,15 @@ pub enum Msg2Portal {
 pub struct Portal {
     listeners: HashMap<String, ListenerLink>,
     connections: HashMap<String, ConnectionLink>,
-    pub tx_portal: Sender<Msg2Portal>,
+    tx_portal: Sender<Msg2Portal>,
     rx_portal: Receiver<Msg2Portal>,
     tx_sessmanager: Sender<Msg2SessionManager>
 }
 
 impl Portal {
 
-    pub fn new(tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
-        let (tx_portal, rx_portal) = channel(50);
+    pub fn new(tx_portal: Sender<Msg2Portal>, rx_portal: Receiver<Msg2Portal>, tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
+
         Self {
             listeners: Default::default(),
             connections: Default::default(),
@@ -226,10 +227,10 @@ impl Portal {
                 match msg {
                     Msg2Portal::Kill => {
                         // This should full stop all listeners and clients and tasks then end this tasks.
-                        for (k, v) in self.listeners.iter_mut() {
+                        for (_k, v) in self.listeners.iter_mut() {
                             v.tx_listener.send(Msg2Listener::Kill).await;
                         }
-                        for (k, v) in self.connections.iter_mut() {
+                        for (_k, v) in self.connections.iter_mut() {
                             v.tx_protocol.send(Msg2Protocol::Kill).await;
                         }
                         break;
@@ -276,7 +277,7 @@ impl Portal {
         self.listeners.insert(listen_id, listen_stub);
     }
 
-    fn accept(&mut self, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin, addr: SocketAddr, tls: bool, protocol: ProtocolType) {
+    fn accept(&mut self, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync, addr: SocketAddr, tls: bool, protocol: ProtocolType) {
         let new_id = self.generate_id();
         let conn_data = ConnectionLink::new(new_id.clone(), conn, addr, tls, self.tx_portal.clone(), protocol, self.tx_sessmanager.clone());
         self.connections.insert(new_id, conn_data);

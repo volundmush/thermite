@@ -21,6 +21,7 @@ use thermite_lib::conn::{
 
 pub struct Session {
     conn_id: String,
+    tx_session: Sender<Msg2Session>,
     rx_session: Receiver<Msg2Session>,
     info: ClientInfo,
     capabilities: ClientCapabilities,
@@ -29,17 +30,21 @@ pub struct Session {
 
 impl Session {
     pub fn new(conn_id: String, info: ClientInfo, capabilities: ClientCapabilities,
-               rx_session: Receiver<Msg2Session>, tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
+               tx_session: Sender<Msg2Session>, rx_session: Receiver<Msg2Session>,
+               tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
         Self {
             conn_id,
             info,
             capabilities,
+            tx_session,
             rx_session,
             tx_sessmanager
         }
     }
 
     pub async fn run(&mut self) {
+        self.info.tx_protocol.send(Msg2Protocol::SessionReady(self.tx_session.clone())).await;
+
         loop {
             if let Some(msg) = self.rx_session.recv().await {
                 match msg {
@@ -86,7 +91,8 @@ impl SessionLink {
         // Return Err() if this connection needs to be kicked.
 
         let mut session = Session::new(conn_id.clone(), info.clone(),
-                                       capabilities.clone(), rx_session, tx_sessmanager);
+                                       capabilities.clone(), tx_session.clone(),
+                                       rx_session, tx_sessmanager);
 
         let handle = tokio::spawn(async move {session.run().await});
 
@@ -106,16 +112,19 @@ impl SessionLink {
 pub struct SessionManager {
     sessions: HashMap<String, SessionLink>,
     rx_sessmanager: Receiver<Msg2SessionManager>,
-    pub tx_sessmanager: Sender<Msg2SessionManager>
+    tx_sessmanager: Sender<Msg2SessionManager>,
+    tx_portal: Sender<Msg2Portal>
 }
 
 impl SessionManager {
-    pub fn new() -> Self {
-        let (tx_sessmanager, rx_sessmanager) = channel(50);
+    pub fn new(tx_sessmanager: Sender<Msg2SessionManager>, rx_sessmanager: Receiver<Msg2SessionManager>,
+               tx_portal: Sender<Msg2Portal>) -> Self {
+
         Self {
             sessions: Default::default(),
             tx_sessmanager,
-            rx_sessmanager
+            rx_sessmanager,
+            tx_portal
         }
     }
 
@@ -130,6 +139,7 @@ impl SessionManager {
                         }
                     },
                     Msg2SessionManager::ClientReady(conn_id, info, capabilities) => {
+                        println!("GOT A CLIENT! {}", conn_id);
                         if let Ok(link) = SessionLink::new(conn_id.clone(), info, capabilities, self.tx_sessmanager.clone()) {
                             self.sessions.insert(conn_id, link);
                         } else {

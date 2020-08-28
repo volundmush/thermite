@@ -1,20 +1,20 @@
 use tokio::{
     prelude::*,
-    task::JoinHandle,
-    sync::mpsc::{Receiver, Sender, channel},
-    net::{TcpListener, TcpStream}
+    sync::mpsc::{Receiver, Sender},
+    time,
+    task
 };
 
 use tokio_util::codec::{Encoder, Decoder, Framed};
 
 
 use std::{
-    collections::HashMap,
-    iter,
+    collections::{HashMap, HashSet},
     io,
     vec::Vec,
     net::SocketAddr,
-    convert::TryInto
+    convert::TryInto,
+    time::Duration
 };
 
 use flate2::{
@@ -25,17 +25,11 @@ use flate2::{
 use bytes::{BytesMut, Buf, BufMut};
 
 use futures::{
-    sink::{Sink, SinkExt},
-    stream::{Stream, StreamExt}
+    sink::{SinkExt},
+    stream::{StreamExt}
 };
 
-use crate::conn::{
-    Msg2Portal,
-    Msg2SessionManager,
-    Msg2Protocol,
-    Msg2Session,
-    ClientInfo, ClientCapabilities
-};
+use crate::conn::{Msg2Portal, Msg2SessionManager, Msg2Protocol, Msg2Session, ClientInfo, ClientCapabilities, ProtocolType};
 
 pub mod tc {
     pub const NULL: u8 = 0;
@@ -428,11 +422,12 @@ impl TelnetConfig {
 
 pub struct TelnetProtocol<T> {
     op_state: HashMap<u8, TelnetOptionState>,
+    addr: SocketAddr,
     enabled: bool,
     config: TelnetConfig,
     conn_id: String,
-    handshakes_left: u8,
-    ttype_handshakes: u8,
+    handshakes_left: HashSet<u8>,
+    handshakes_left_2: HashSet<u8>,
     conn: Framed<T, TelnetCodec>,
     ttype_first: Option<Vec<u8>>,
     tx_protocol: Sender<Msg2Protocol>,
@@ -443,7 +438,7 @@ pub struct TelnetProtocol<T> {
 }
 
 impl<T> TelnetProtocol<T> where 
-    T: AsyncRead + AsyncWrite + Send + 'static + Unpin
+    T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync
 {
     pub fn new(conn_id: String, conn: T, addr: SocketAddr, tls: bool, tx_protocol: Sender<Msg2Protocol>,
                rx_protocol: Receiver<Msg2Protocol>, tx_portal: Sender<Msg2Portal>,
@@ -453,6 +448,7 @@ impl<T> TelnetProtocol<T> where
 
         let mut prot = Self {
             conn_id,
+            addr,
             tx_portal,
             op_state: Default::default(),
             enabled: false,
@@ -460,8 +456,8 @@ impl<T> TelnetProtocol<T> where
             tx_protocol,
             rx_protocol,
             conn: telnet_codec,
-            handshakes_left: 0,
-            ttype_handshakes: 0,
+            handshakes_left: HashSet::default(),
+            handshakes_left_2: HashSet::default(),
             ttype_first: None,
             tx_sessmanager,
             tx_session: None
@@ -470,22 +466,23 @@ impl<T> TelnetProtocol<T> where
         // Create Handlers for options...
         // Spread out for easy commenting-out
         // Code, Will-on-start, Do-on-start, handshakes-involved
-        for (b, will_start, do_start, counter) in vec![
-            (tc::SGA, true, false, 1),
-            (tc::NAWS, false, true, 1),
-            (tc::TTYPE, false, true, 1),
-            (tc::MXP, true, false, 1),
-            (tc::MSSP, true, false, 1),
+        for (b, will_start, do_start) in vec![
+            (tc::SGA, true, false),
+            (tc::NAWS, false, true),
+            (tc::TTYPE, false, true),
+            (tc::MXP, true, false),
+            (tc::MSSP, true, false),
             //(tc::MCCP2, true, false, 1),
             //(tc::MCCP3, true, false, 1),
-            (tc::GMCP, true, false, 1),
-            (tc::MSDP, true, false, 1),
-            (tc::LINEMODE, false, true, 1),
-            (tc::TELOPT_EOR, true, false, 1)
+            (tc::GMCP, true, false),
+            (tc::MSDP, true, false),
+            (tc::LINEMODE, false, true),
+            (tc::TELOPT_EOR, true, false)
         ] {
             let handler = TelnetOptionState::new(will_start, do_start);
-            prot.handshakes_left = prot.handshakes_left + counter;
             prot.op_state.insert(b, handler);
+            prot.handshakes_left.insert(b);
+            prot.handshakes_left_2.insert(b);
         }
 
         prot.config.tls = tls;
@@ -512,6 +509,14 @@ impl<T> TelnetProtocol<T> where
         }
         // Just packing all of this together so it gets sent at once.
         self.conn.send(TelnetSend::RawBytes(raw_bytes)).await;
+        let mut send_chan = self.tx_protocol.clone();
+
+        // Ready a message to fire off quickly for in case
+        let mut ready_task = tokio::spawn(async move {
+            time::delay_for(Duration::from_millis(500)).await;
+            send_chan.send(Msg2Protocol::ProtocolReady).await;
+            ()
+        });
 
         loop {
             tokio::select! {
@@ -545,14 +550,50 @@ impl<T> TelnetProtocol<T> where
                             Msg2Protocol::Disconnect(reason) => {
                                 break;
                             },
-                            Msg2Protocol::Ready(chan) => {
+                            Msg2Protocol::SessionReady(chan) => {
+                                println!("Session is linked!");
                                 self.tx_session = Some(chan);
+                            },
+                            Msg2Protocol::ProtocolReady => {
+                                self.start_session().await;
                             }
                         }
                     }
                 }
             }
             
+        }
+    }
+
+    fn client_info(&self) -> ClientInfo {
+        ClientInfo {
+            conn_id: self.conn_id.clone(),
+            addr: self.addr.clone(),
+            tls: self.config.tls,
+            protocol: ProtocolType::Telnet,
+            tx_protocol: self.tx_protocol.clone()
+        }
+    }
+
+    async fn start_session(&mut self) {
+        if self.handshakes_left.len() == 0 {
+            return;
+        }
+        // This leaves _2 still ready to handle ttype in case of strange timing.
+        self.handshakes_left.clear();
+        self.tx_sessmanager.send(Msg2SessionManager::ClientReady(self.conn_id.clone(),
+                                                                 self.client_info(),
+                                                                 self.config.capabilities())).await;
+    }
+
+    async fn process_handshake(&mut self, op: u8) {
+        if self.handshakes_left.len() == 0 {
+            return;
+        }
+        self.handshakes_left.remove(&op);
+        self.handshakes_left_2.remove(&op);
+        if self.handshakes_left.len() == 0 {
+            self.start_session().await;
         }
     }
 
@@ -619,6 +660,7 @@ impl<T> TelnetProtocol<T> where
                     // This cannot actually happen.
                 }
             }
+            self.process_handshake(op).await;
 
         } else {
             let mut response: u8 = 0;
@@ -641,6 +683,13 @@ impl<T> TelnetProtocol<T> where
             tc::NAWS => self.config.naws = true,
             tc::TTYPE => {
                 self.config.ttype = true;
+                // These are fake codes used to represent TTYPE sub-options.
+                self.handshakes_left.insert(252);
+                self.handshakes_left_2.insert(252);
+                self.handshakes_left.insert(253);
+                self.handshakes_left_2.insert(253);
+                self.handshakes_left.insert(254);
+                self.handshakes_left_2.insert(254);
                 self.request_ttype().await;
             },
             tc::LINEMODE => self.config.linemode = true,
@@ -710,6 +759,7 @@ impl<T> TelnetProtocol<T> where
         if let Ok(text) = data {
             // Only if we can decode this text, and only if we have a linked session, do we pass the
             // text on.
+            println!("DECODED A LINE: {}", text);
             let maybe_chan = self.tx_session.clone();
             if let Some(mut chan) = maybe_chan {
                 chan.send(Msg2Session::ClientCommand(text)).await;
@@ -728,12 +778,14 @@ impl<T> TelnetProtocol<T> where
 
     async fn request_ttype(&mut self) {
         let data: Vec<u8> = vec![1];
-        self.send_sub_data(tc::TTYPE, data);
+        self.send_sub_data(tc::TTYPE, data).await;
     }
 
     async fn receive_ttype(&mut self, data: Vec<u8>) {
-        if self.ttype_handshakes > 2 {
-            // No reason to listen to TTYPE anymore.
+        if !self.handshakes_left_2.contains(&252)
+            && !self.handshakes_left_2.contains(&253)
+            && !self.handshakes_left_2.contains(&254) {
+            // No reason to answer this anymore...
             return;
         }
         if !data.len() > 1 {
@@ -761,32 +813,37 @@ impl<T> TelnetProtocol<T> where
 
         incoming = incoming.to_uppercase();
 
-        match self.ttype_handshakes {
-            0 => {
-                self.ttype_first = Some(data.clone());
-                self.receive_ttype_0(incoming).await;
-            },
-            1 => {
-                let t_first = self.ttype_first.clone();
-                if let Some(first) = t_first {
-                    if first.eq(&data) {
-                        // This client does not support advanced ttype. Ignore further
-                        // calls to TTYPE and consider this complete.
-                        self.ttype_handshakes = 2;
-                        self.receive_ttype_basic().await;
-                    } else {
-                        self.receive_ttype_1(incoming);
-                    }
-                }
-            },
-            2 => {
-                self.receive_ttype_2(incoming);
-            }
-            _ => {}
+        let run_first = self.handshakes_left_2.contains(&252);
+
+        if run_first {
+            self.ttype_first = Some(data.clone());
+            self.receive_ttype_0(incoming).await;
+            self.process_handshake(252).await;
+            return;
         }
-        self.ttype_handshakes = self.ttype_handshakes + 1;
-        if self.ttype_handshakes < 2 {
-            self.request_ttype().await;
+
+        let run_second = self.handshakes_left_2.contains(&253);
+
+        if run_second {
+            let t_first = self.ttype_first.clone();
+            if let Some(first) = t_first {
+                if first.eq(&data) {
+                    // This client does not support advanced ttype. Ignore further
+                    // calls to TTYPE and consider this complete.
+                    self.process_handshake(253);
+                    self.process_handshake(254);
+                } else {
+                    self.receive_ttype_1(incoming).await;
+                    self.process_handshake(253);
+                }
+            }
+            return;
+        }
+
+        let run_third = self.handshakes_left_2.contains(&254);
+        if run_third {
+            self.receive_ttype_2(incoming).await;
+            self.process_handshake(254);
         }
     }
 

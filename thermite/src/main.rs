@@ -9,7 +9,10 @@ use thermite::session::{
     SessionManager
 };
 
-use tokio::net::TcpListener;
+use tokio::{
+    net::TcpListener,
+    sync::mpsc::{channel, Receiver, Sender}
+};
 use std::{
     env,
     error::Error,
@@ -59,31 +62,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let db_task = tokio::spawn(async move {db.run().await});
 
-    let mut sess_manager = SessionManager::new();
-    let tx_sessmanager = sess_manager.tx_sessmanager.clone();
+    let (tx_sessmanager, rx_sessmanager) = channel(50);
+    let (tx_portal, rx_portal) = channel(50);
 
+    let mut sess_manager = SessionManager::new(tx_sessmanager.clone(), rx_sessmanager, tx_portal.clone());
     let sess_task = tokio::spawn(async move {sess_manager.run().await});
 
-    let mut portal = Portal::new(tx_sessmanager);
-    let tx_portal = portal.tx_portal.clone();
+    let mut portal = Portal::new(tx_portal.clone(), rx_portal, tx_sessmanager.clone());
 
     for (k, v) in conf.listeners.iter() {
+
+        let protocol = match v.protocol.to_lowercase().as_ref() {
+            "telnet" => ProtocolType::Telnet,
+            "websocket" => ProtocolType::WebSocket,
+            _ => panic!("Unsupported Protocol type {}", v.protocol)
+        };
+
         let addr = interfaces.get(&v.interface).expect("Telnet Server attempting to use non-existent interface!");
         let sock = SocketAddr::new(addr.clone(), v.port);
         let listener = TcpListener::bind(sock).await.expect("Could not bind Telnet Server port... is it in use?");
 
-        let mut protocol = ProtocolType::Telnet;
-
-
-
         if let Some(tls_key) = &v.tls {
             // Will worry about TLS later...
         } else {
-            telnet_server.listen(String::from(k), listener, None);
+            portal.listen(String::from(k), listener, None, protocol);
         }
     }
-    let telnet_task = tokio::spawn(async move {telnet_server.run().await});
-    telnet_task.await;
+    let portal_task = tokio::spawn(async move {portal.run().await});
+    portal_task.await;
 
     Ok(())
 }
