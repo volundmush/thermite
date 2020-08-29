@@ -307,3 +307,104 @@ impl EvString {
         out
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct EvFormatRules {
+    pub ansi: bool,
+    pub xterm256: bool,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl Default for EvFormatRules {
+    fn default() -> Self {
+        Self {
+            ansi: false,
+            xterm256: false,
+            width: 78,
+            height: 24
+        }
+    }
+}
+
+pub trait ToFormatRules {
+    fn rules(&self) -> EvFormatRules;
+}
+
+impl ToFormatRules for EvFormatRules {
+    fn rules(&self) -> EvFormatRules {
+        self.clone()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum EvFormatRow {
+    // When it encounters a FormatRules, EvFormatStack will change its rules.
+    FormatRules(EvFormatRules),
+    // Text columns are a Vec<EvString>. This is because the number of columns is
+    // arbitrary
+    ColumnNames(Vec<EvString>),
+    Columns(Vec<EvString>),
+    Header(Option<EvString>),
+    Subheader(Option<EvString>),
+    Separator(Option<EvString>),
+    Text(Option<EvString>),
+}
+
+impl EvFormatRow {
+    pub fn render(&self, rules: &EvFormatRules) -> String {
+        let mut out = String::new();
+
+        match self {
+            Self::Text(val) => {
+                if let Some(val) = val {
+                    out.push_str(&val.render(rules.ansi, rules.xterm256));
+                }
+            },
+            _ => {
+
+            }
+        }
+
+        out
+    }
+}
+
+
+#[derive(Clone, Debug)]
+pub struct EvFormatStack {
+    rows: Vec<EvFormatRow>,
+    rules: EvFormatRules,
+}
+
+impl EvFormatStack {
+    pub fn new(rules: &impl ToFormatRules) -> Self {
+        Self {
+            rows: Default::default(),
+            rules: rules.rules()
+        }
+    }
+
+    pub fn insert(&mut self, row: EvFormatRow) {
+        self.rows.push(row);
+    }
+
+    pub fn clear(&mut self) {
+        self.rows.clear();
+    }
+
+    pub fn render(&self) -> String {
+        let mut cur_rules = self.rules.clone();
+        let mut out = String::new();
+
+        for row in self.rows.iter() {
+            if let EvFormatRow::FormatRules(new) = row {
+                cur_rules = new.clone()
+            }
+            else {
+                out.push_str(&row.render(&cur_rules))
+            }
+        }
+        out
+    }
+}
