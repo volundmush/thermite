@@ -21,3 +21,4 @@ tokio-tungstenite = {version = "0.11", features = ["stream"]}
 logos = "0.11"
 #thrussh = "0.28"
 lazy_static = "1.4"
+regex = "1.3"
