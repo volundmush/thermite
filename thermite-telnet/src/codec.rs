@@ -1,5 +1,5 @@
 use tokio_util::codec::{Encoder, Decoder};
-use bytes::{BytesMut, Buf, BufMut};
+use bytes::{BytesMut, Buf, BufMut, Bytes};
 use std::io;
 use crate::codes;
 
@@ -8,19 +8,25 @@ enum TelnetState {
     Sub(u8),
 }
 
-// Line was definitely a line.
-// Data byte by byte application data... bad news for me.
+#[derive(Clone, Debug)]
+pub enum TelnetError {
+    BufferReached,
+    NAWS,
+    TTYPE,
+}
+
 #[derive(Clone, Debug)]
 pub enum TelnetEvent {
     Negotiate(u8, u8),
     Line(String),
     Prompt(String),
-    SubNegotiate(u8, BytesMut),
-    Data(u8),
+    SubNegotiate(u8, Bytes),
+    Data(Bytes),
     // This is width then height
     NAWS(u16, u16),
     TTYPE(String),
     Command(u8),
+    Error(TelnetError)
 }
 
 enum IacSection {
@@ -33,25 +39,25 @@ enum IacSection {
 }
 
 pub struct TelnetCodec {
-    sub_data: BytesMut,
-    app_data: BytesMut,
     line_mode: bool,
-    state: TelnetState
+    state: TelnetState,
+    app_data: BytesMut,
+    sub_data: BytesMut,
 }
 
 impl TelnetCodec {
-    pub fn new(line_mode: bool, max_read_buffer: usize) -> Self {
+    pub fn new(line_mode: bool, max_buffer: usize) -> Self {
         TelnetCodec {
-            app_data: BytesMut::with_capacity(max_read_buffer),
-            sub_data: BytesMut::with_capacity(max_read_buffer),
             line_mode,
             state: TelnetState::Data,
+            app_data: BytesMut::with_capacity(max_buffer),
+            sub_data: BytesMut::with_capacity(max_buffer)
         }
     }
 }
 
 impl TelnetCodec {
-    fn try_parse_iac(&mut self, bytes: impl Buf) -> (IacSection, usize) {
+    fn try_parse_iac(&mut self, bytes: &[u8]) -> (IacSection, usize) {
         if bytes.len() < 2 {
             return (IacSection::Pending, 0);
         };
@@ -74,7 +80,7 @@ impl TelnetCodec {
             }
             _ => {
                 // Still working on this part. Got more commands to enable...
-                (IacSection::Error, 0)
+                (IacSection::Command(bytes[1]), 1)
             }
         }
     }
@@ -85,8 +91,6 @@ impl Decoder for TelnetCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // should put something here about checking for WAY TOO MUCH BYTES... and kicking if
-        // abuse is detected.
 
         loop {
             if src.is_empty() {
@@ -118,7 +122,12 @@ impl Decoder for TelnetCodec {
                     // this occurs if the IAC is not complete.
                     IacSection::Pending => return Ok(None),
                     IacSection::IAC => {
-                        self.app_data.push(codes::IAC);
+                        if self.app_data.remaining_mut() > 0 {
+                            self.app_data.put_u8(codes::IAC);
+                        } else {
+                            // Breaking the buffer will cause a disconnect.
+                            return Err(Self::Error::new(io::ErrorKind::WriteZero, format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
+                        }
                     },
                     IacSection::Command(op) => return Ok(Some(TelnetEvent::Command(op))),
                     IacSection::SE => {
@@ -126,16 +135,17 @@ impl Decoder for TelnetCodec {
                             TelnetState::Sub(op) => {
                                 // Most sub-negotiation will happen application-side, but we can do
                                 // some standard feature supports here.
-                                let mut answer: Option<TelnetEvent> = None;
+                                let mut answer = Ok(None);
                                 match op {
                                     codes::NAWS => {
                                         // NAWS must be 4 bytes that can be converted to u16s.
                                         // Reject malformed NAWS.
                                         if self.sub_data.len() == 4 {
-                                            let (width, height) = self.sub_data.split_at(2);
-                                            let width = u16::from_be_bytes(width.unwrap());
-                                            let height = u16::from_be_bytes(height.unwrap());
-                                            answer = Some(TelnetEvent::NAWS(width, height))
+                                            let width = self.sub_data.get_u16_be();
+                                            let height = self.sub_data.get_u16_be();
+                                            answer = Ok(Some(TelnetEvent::NAWS(width, height)))
+                                        } else {
+                                            answer = Err(Self::Error::new(io::ErrorKind::Other, "Received improperly formatted NAWS data."));
                                         }
                                     },
                                     codes::TTYPE => {
@@ -144,63 +154,102 @@ impl Decoder for TelnetCodec {
                                         if self.sub_data.len() > 2 {
                                             // The first byte is 0, the rest must be a string. If
                                             // we don't have at least two bytes we cannot proceed.
-                                            let (is, info) = data.split_at(1);
-                                            if is[0] == 0 {
+                                            if self.sub_data.get_u8() == 0 {
                                                 // If 'is' isn't 0, this is improper and we will not
                                                 // bother converting to string.
-                                                let mut incoming = String::from("");
-                                                if let Ok(conv) = String::from_utf8(Vec::from(info)) {
-                                                    answer = Some(TelnetEvent::TTYPE(conv));
+                                                if let Ok(conv) = String::from_utf8(self.sub_data.clone().to_vec()) {
+                                                    answer = Ok(Some(TelnetEvent::TTYPE(conv)));
+                                                } else {
+
                                                 }
+                                            } else {
+
                                             }
+                                        } else {
+                                            
                                         }
                                     },
                                     // This is either unrecognized or app-specific.
-                                    _ => Some(TelnetEvent::SubNegotiate(op, self.sub_data.clone()))
+                                    _ => answer = Ok(Some(TelnetEvent::SubNegotiate(op, self.sub_data.clone().freeze())))
                                 }
                                 self.sub_data.clear();
                                 self.state = TelnetState::Data;
-                                return Ok(answer);
+                                return answer;
                             },
                             _ => {
-                                self.app_data.push(codes::SE);
+                                self.app_data.put_u8(codes::SE);
                             }
                         }
                     }
                 }
             } else {
-                let byte = src.get_u8();
-
                 match self.state {
                     TelnetState::Data => {
                         if self.line_mode {
-                            match byte {
+                            match src[0] {
                                 codes::CR => {
-
+                                    // Just ignoring CRs for now so I don't have to bother stripping them.
+                                    src.advance(1);
                                 },
                                 codes::LF => {
                                     // Attempt to convert our data to string and send it.
+                                    src.advance(1);
                                     let mut answer: Option<TelnetEvent> = None;
                                     if let Ok(conv) = String::from_utf8(self.app_data.to_vec()) {
-                                        answer = Some(TelnetEvent::Line(conv));
+                                        return Ok(Some(TelnetEvent::Line(conv)));
                                     }
                                     self.app_data.clear();
                                     return Ok(answer);
                                 },
                                 _ => {
-                                    self.app_data.push(byte);
+                                    // We need to grab as much data as possible up to a CR, LF, or IAC in this state.
+                                    if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC || b == &codes::CR || b == &codes::LF) {
+                                        let mut data = src.split_to(ipos);
+                                        if data.len() > 0 {
+                                            if self.app_data.remaining_mut() >= data.len() {
+                                                self.app_data.put(data);
+                                            } else {
+                                                return Err(Self::Error::new(io::ErrorKind::WriteZero, 
+                                                    format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         } else {
-                            // I really don't wanna be using data mode.. ever.
-                            return Ok(Some(TelnetEvent::Data(byte)));
+                            // I really don't wanna be using data mode.. ever. But if someone else does... this must seek up to
+                            // an IAC, at which point everything gets copied forward. If there is no IAC, then it just shunts
+                            // EVERYTHING forward.
+                            if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC || b == &codes::CR || b == &codes::LF) {
+                                let mut data = src.split_to(ipos);
+                                return Ok(Some(TelnetEvent::Data(data.freeze())));
+                            } else {
+                                let mut data = src.split_to(src.len());
+                                return Ok(Some(TelnetEvent::Data(data.freeze())));
+                            }
+                            
                         }
                     },
                     TelnetState::Sub(op) => {
-                        self.sub_data.push(byte);
+                        // Processing byte in Sub Negotiation mode. In SB mode we are clear to gobble up as many
+                        // bytes as we wish, up to an IAC. In fact, until we get an IAC, we can't do anything but
+                        // wait for more bytes.
+                        if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC) {
+                            // Split off any available up to an IAC and stuff it in the sub data buffer.
+                            let mut data = src.split_to(ipos);
+                            if data.len() > 0 {
+                                if self.sub_data.remaining_mut() >= data.len() {
+                                    self.sub_data.put(data);
+                                } else {
+                                    return Err(Self::Error::new(io::ErrorKind::WriteZero, 
+                                        format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
+                                }
+                            }
+                        } else {
+                            return Ok(None)
+                        }
                     }
                 }
-
             }
         }
     }

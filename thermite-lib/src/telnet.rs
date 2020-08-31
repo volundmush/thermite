@@ -678,14 +678,7 @@ impl<T> TelnetProtocol<T> where
     }
 
 
-    async fn receive_naws(&mut self, data: Vec<u8>) {
-        if data.len() != 4 {
-            // Naws data must be 4 bytes. We'll ignore this if it's not.
-            return;
-        }
-        let (width, height) = data.split_at(2);
-        let width = u16::from_be_bytes(width.try_into().unwrap());
-        let height = u16::from_be_bytes(height.try_into().unwrap());
+    async fn naws(&mut self, width: u16, height: u16) {
         self.config.width = width;
         self.config.height = height;
     }
