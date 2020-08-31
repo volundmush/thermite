@@ -141,8 +141,8 @@ impl Decoder for TelnetCodec {
                                         // NAWS must be 4 bytes that can be converted to u16s.
                                         // Reject malformed NAWS.
                                         if self.sub_data.len() == 4 {
-                                            let width = self.sub_data.get_u16_be();
-                                            let height = self.sub_data.get_u16_be();
+                                            let width = self.sub_data.get_u16();
+                                            let height = self.sub_data.get_u16();
                                             answer = Ok(Some(TelnetEvent::NAWS(width, height)))
                                         } else {
                                             answer = Err(Self::Error::new(io::ErrorKind::Other, "Received improperly formatted NAWS data."));
@@ -186,35 +186,33 @@ impl Decoder for TelnetCodec {
                 match self.state {
                     TelnetState::Data => {
                         if self.line_mode {
-                            match src[0] {
-                                codes::CR => {
-                                    // Just ignoring CRs for now so I don't have to bother stripping them.
-                                    src.advance(1);
-                                },
-                                codes::LF => {
-                                    // Attempt to convert our data to string and send it.
-                                    src.advance(1);
-                                    let mut answer: Option<TelnetEvent> = None;
+                            // We need to grab as much data as possible up to an IAC.
+                            let mut cur = src.as_ref();
+                            if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC) {
+                                // there is an IAC.
+                                let (data, _) = cur.split_at(ipos);
+                                cur = data;
+                            }
+                            // If thre is no IAC, then 'cur' is the entire current data.
+                            // The fact that we were called means that cur contains SOMETHING and it's not an IAC.
+                            // Here we will search for a CRLF sequence...
+                            if let Some(ipos) = cur.windows(2).position(|b| b[0] == codes::CR && b[1] == codes::LF) {
+                                // Hooray, we have an endline.
+                                let mut answer = Ok(None);
+                                let mut data = src.split_to(ipos);
+                                // Advancing by + 2 due to the CRLF
+                                src.advance(data.len() + 2);
+                                // We must first add this data to app_data due to possible escaped other sources of text, like escaped IACs.
+                                if self.app_data.remaining_mut() >= data.len() {
+                                    self.app_data.put(data);
                                     if let Ok(conv) = String::from_utf8(self.app_data.to_vec()) {
-                                        return Ok(Some(TelnetEvent::Line(conv)));
+                                        answer = Ok(Some(TelnetEvent::Line(conv)));
                                     }
                                     self.app_data.clear();
-                                    return Ok(answer);
-                                },
-                                _ => {
-                                    // We need to grab as much data as possible up to a CR, LF, or IAC in this state.
-                                    if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC || b == &codes::CR || b == &codes::LF) {
-                                        let mut data = src.split_to(ipos);
-                                        if data.len() > 0 {
-                                            if self.app_data.remaining_mut() >= data.len() {
-                                                self.app_data.put(data);
-                                            } else {
-                                                return Err(Self::Error::new(io::ErrorKind::WriteZero, 
-                                                    format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
-                                            }
-                                        }
-                                    }
+                                } else {
+                                    answer = Err(Self::Error::new(io::ErrorKind::WriteZero, format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
                                 }
+                                return answer;
                             }
                         } else {
                             // I really don't wanna be using data mode.. ever. But if someone else does... this must seek up to
@@ -255,53 +253,59 @@ impl Decoder for TelnetCodec {
     }
 }
 
-impl Encoder<TelnetSend> for TelnetCodec {
+impl Encoder<TelnetEvent> for TelnetCodec {
     type Error = io::Error;
 
-    fn encode(&mut self, item: TelnetSend, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let mut outgoing = BytesMut::with_capacity(32);
+    fn encode(&mut self, item: TelnetEvent, dst: &mut BytesMut) -> Result<(), Self::Error> {
 
         match item {
-            TelnetSend::Data(data) => {
-                outgoing.extend(data);
+            TelnetEvent::Data(data) => {
+                dst.reserve(data.len());
+                dst.put(data);
             },
-            TelnetSend::Line(mut data) => {
-                if !data.ends_with(&[codes::CR, codes::LF]) {
-                    data.push(codes::CR);
-                    data.push(codes::LF);
+            TelnetEvent::Line(mut data) => {
+                if !data.ends_with("\r\n") {
+                    data.push_str("\r\n");
                 }
-                outgoing.extend(data);
+                dst.reserve(data.len());
+                dst.put(data.as_bytes());
             }
-            TelnetSend::Prompt(data) => {
+            TelnetEvent::Prompt(data) => {
                 // Not sure what to do about prompts yet.
             },
-            TelnetSend::Command((comm, op)) => {
-                outgoing.put_u8(codes::IAC);
-                outgoing.put_u8(comm);
-                outgoing.put_u8(op);
+            TelnetEvent::Negotiate(comm, op) => {
+                dst.reserve(3);
+                dst.put(vec![codes::IAC, comm, op]);
             },
-            TelnetSend::Sub((op, data)) => {
-                outgoing.put_u8(codes::IAC);
-                outgoing.put_u8(codes::SB);
-                outgoing.put_u8(op);
-                outgoing.extend(data);
-                outgoing.reserve(2);
-                outgoing.put_u8(codes::IAC);
-                outgoing.put_u8(codes::SE);
-                // Compression must be enabled immediately after
-                // IAC SB MCCP2 IAC SE is sent.
-                if op == codes::MCCP2 {
-                    //self.mccp2 = true;
-                }
+            TelnetEvent::SubNegotiate(op, mut data) => {
+                dst.reserve(5 + data.len());
+                dst.put_u8(codes::IAC);
+                dst.put_u8(codes::SB);
+                dst.put_u8(op);
+                dst.put(data);
+                dst.put_u8(codes::IAC);
+                dst.put_u8(codes::SE);
             },
-            TelnetSend::RawBytes(data) => {
-                outgoing.extend(data);
+            TelnetEvent::NAWS(width, height) => {
+                dst.reserve(9);
+                dst.put_u8(codes::IAC);
+                dst.put_u8(codes::SB);
+                dst.extend(&width.to_be_bytes());
+                dst.extend(&height.to_be_bytes());
+                dst.put_u8(codes::IAC);
+                dst.put_u8(codes::SE);
+            },
+            TelnetEvent::TTYPE(data) => {
+                dst.reserve(data.len() + 6);
+                dst.put_u8(codes::IAC);
+                dst.put_u8(codes::SB);
+                dst.put_u8(codes::TTYPE);
+                dst.put_u8(0);
+                dst.put(data.as_bytes());
+                dst.put_u8(codes::IAC);
+                dst.put_u8(codes::SE);
             }
         }
-        if self.mccp2 {
-
-        }
-        dst.extend(outgoing);
         Ok(())
     }
 }
