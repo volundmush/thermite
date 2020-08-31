@@ -47,10 +47,16 @@ pub struct TelnetCodec {
 
 impl TelnetCodec {
     pub fn new(line_mode: bool, max_buffer: usize) -> Self {
+        let mut capacity = 0;
+        if line_mode {
+            capacity = max_buffer;
+        }
+        // Setting an override capacity. in line mode, app_data is never used so we don't need to allocate memory.
+
         TelnetCodec {
             line_mode,
             state: TelnetState::Data,
-            app_data: BytesMut::with_capacity(max_buffer),
+            app_data: BytesMut::with_capacity(capacity),
             sub_data: BytesMut::with_capacity(max_buffer)
         }
     }
@@ -122,11 +128,19 @@ impl Decoder for TelnetCodec {
                     // this occurs if the IAC is not complete.
                     IacSection::Pending => return Ok(None),
                     IacSection::IAC => {
-                        if self.app_data.remaining_mut() > 0 {
-                            self.app_data.put_u8(codes::IAC);
+                        // if we're in line mode then we should append the escaped 255 to app_data.
+                        if self.line_mode {
+                            if self.app_data.remaining_mut() > 0 {
+                                self.app_data.put_u8(codes::IAC);
+                            } else {
+                                return Err(Self::Error::new(io::ErrorKind::WriteZero, 
+                                    format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
+                            }
                         } else {
-                            // Breaking the buffer will cause a disconnect.
-                            return Err(Self::Error::new(io::ErrorKind::WriteZero, format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
+                             // But if we're not in line mode, just send this onwards. It's a bit inefficient but whatever.
+                             let mut data = BytesMut::with_capacity(1);
+                             data.put_u8(codes::IAC);
+                             return Ok(Some(TelnetEvent::Data(data.freeze())));
                         }
                     },
                     IacSection::Command(op) => return Ok(Some(TelnetEvent::Command(op))),
@@ -177,7 +191,19 @@ impl Decoder for TelnetCodec {
                                 return answer;
                             },
                             _ => {
-                                self.app_data.put_u8(codes::SE);
+                                if self.line_mode {
+                                    if self.app_data.remaining_mut() > 0 {
+                                        self.app_data.put_u8(codes::SE);
+                                    } else {
+                                        return Err(Self::Error::new(io::ErrorKind::WriteZero, 
+                                            format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
+                                    }
+                                } else {
+                                     // But if we're not in line mode, just send this onwards. It's a bit inefficient but whatever.
+                                     let mut data = BytesMut::with_capacity(1);
+                                     data.put_u8(codes::SE);
+                                     return Ok(Some(TelnetEvent::Data(data.freeze())));
+                                }
                             }
                         }
                     }
