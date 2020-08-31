@@ -193,28 +193,35 @@ impl Decoder for TelnetCodec {
                                 let (data, _) = cur.split_at(ipos);
                                 cur = data;
                             }
-                            // If thre is no IAC, then 'cur' is the entire current data.
+                            // If there is no IAC, then 'cur' is the entire current data.
                             // The fact that we were called means that cur contains SOMETHING and it's not an IAC.
                             // Here we will search for a CRLF sequence...
+                            let mut endline = false;
                             if let Some(ipos) = cur.windows(2).position(|b| b[0] == codes::CR && b[1] == codes::LF) {
-                                // Hooray, we have an endline.
-                                let mut answer = Ok(None);
-                                let mut data = src.split_to(ipos);
-                                // Advancing by + 2 due to the CRLF
-                                src.advance(data.len() + 2);
-                                // We must first add this data to app_data due to possible escaped other sources of text, like escaped IACs.
-                                if self.app_data.remaining_mut() >= data.len() {
-                                    self.app_data.put(data);
-                                    if let Ok(conv) = String::from_utf8(self.app_data.to_vec()) {
-                                        answer = Ok(Some(TelnetEvent::Line(conv)));
-                                    }
-                                    self.app_data.clear();
-                                } else {
-                                    answer = Err(Self::Error::new(io::ErrorKind::WriteZero, format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
-                                }
-                                return answer;
+                                // We have an endline. once more, set the cur.
+                                let (data, _) = cur.split_at(ipos);
+                                cur = data;
+                                endline = true;
                             }
-                        } else {
+                            let mut answer = Ok(None);
+                            
+                            // We must first add this data to app_data due to possible escaped other sources of text, like escaped IACs.
+                            if self.app_data.remaining_mut() >= cur.len() {
+                                self.app_data.put(cur);
+                            } else {
+                                answer = Err(Self::Error::new(io::ErrorKind::WriteZero, format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
+                            }
+                            src.advance(cur.len());
+                            if endline {
+                                if let Ok(conv) = String::from_utf8(self.app_data.to_vec()) {
+                                    answer = Ok(Some(TelnetEvent::Line(conv)));
+                                }
+                                // Advancing by two more due to the CRLF.
+                                src.advance(2);
+                                self.app_data.clear();
+                            }
+                            return answer;
+                            } else {
                             // I really don't wanna be using data mode.. ever. But if someone else does... this must seek up to
                             // an IAC, at which point everything gets copied forward. If there is no IAC, then it just shunts
                             // EVERYTHING forward.
