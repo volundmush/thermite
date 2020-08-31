@@ -1,6 +1,9 @@
 use crate::ansi::{
     ColorCode,
-    AnsiSpan
+    AnsiToken,
+    AnsiString,
+    AnsiStyle,
+    strip_ansi
 };
 
 use logos::{Logos, Lexer, Span, Source};
@@ -10,6 +13,7 @@ use std::{
     str::FromStr,
     collections::HashMap
 };
+use regex::internal::Input;
 
 //rgybmcwx 
 fn parse_ansi_color(src: &str) -> u8 {
@@ -68,6 +72,11 @@ fn parse_xterm_color(src: &str) -> u8 {
 
 fn getstr(lex: &mut Lexer<Token>) -> Option<String> {
     Some(String::from(lex.slice()))
+}
+
+fn get_space_count(lex: &mut Lexer<Token>) -> Option<usize> {
+    // Spaces are always a single byte so this is OK.
+    Some(String::from(lex.slice()).len())
 }
 
 fn get_ansi_basic_fg(lex: &mut Lexer<Token>) -> Option<ColorCode> {
@@ -184,127 +193,217 @@ pub enum Token {
     Error
 }
 
+pub fn parse_evstring(raw: &str) -> Vec<AnsiToken> {
+    // This parses an EvString sequence and generates an ANSI-coded string for use with AnsiString.
+    let mut out_vec: Vec<AnsiToken> = Vec::default();
 
-// This is named EvString after Evennia, from whence the ANSI color pattern was taken.
-pub struct EvString {
-    pub raw: String,
-    pub plain: String
+    let mut current_style = AnsiStyle::new();
+    let mut ansi_change = false;
+
+    for (tok, span) in Token::lexer(raw).spanned() {
+        let mut new_style = current_style.clone();
+
+        match tok {
+            // These tokens can add text, so are treated differently from the ANSI state changers.
+            Token::Pipe | Token::Crlf | Token::Tab | Token::Space | Token::Spaces | Token::Word => {
+                // if ANSI state changed, we must flush the change.
+                if ansi_change {
+                    out_vec.push(AnsiToken::Ansi(new_style.clone()));
+                    ansi_change = false;
+                }
+                match tok {
+                    Token::Pipe => out_vec.push(AnsiToken::Text(String::from("|"))),
+                    Token::Crlf => out_vec.push(AnsiToken::Newline),
+                    Token::Tab => out_vec.push(AnsiToken::Spaces(4)),
+                    Token::Space => out_vec.push(AnsiToken::Spaces(1)),
+                    Token::Spaces => {
+                        if let Some(new_text) = raw.slice(span.clone()) {
+                            out_vec.push(AnsiToken::Spaces(new_text.len()));
+                        }
+                    }
+                    Token::Word => {
+                        if let Some(new_text) = raw.slice(span.clone()) {
+                            out_vec.push(AnsiToken::Text(String::from(new_text)));
+                        }
+                    }
+                    _ => {}
+                }
+            },
+            // All of these tokens (possibly) change the ANSI state.
+            Token::Reset => {
+              // Ansi resets work a little bit differently from the rest.
+                if ansi_change {
+                    // If there has been an ANSI change since the last push that has not yet reached
+                    // any test,, then there's no reason to keep it.
+                    ansi_change = false;
+                    // new_style will not be copied into current_style. Instead, we clear the slate
+                    // and push the reset token.
+                    out_vec.push(AnsiToken::Reset);
+                    current_style = AnsiStyle::default();
+                }
+            },
+            Token::Hilite | Token::Inverse | Token::Blink | Token::Italic |
+            Token::Strikethrough | Token::Underline => {
+                match tok {
+                    Token::Hilite => new_style.hilite = true,
+                    Token::Inverse => new_style.inverse = true,
+                    Token::Blink => new_style.blink = true,
+                    Token::Italic => new_style.italic = true,
+                    Token::Strikethrough => new_style.strike = true,
+                    Token::Underline => new_style.underline = true,
+                    _ => {}
+                }
+                if !current_style.eq(&new_style) {
+                    // If the new style isn't equal to the old, then something changed.
+                    // However, many things might change before we start printing more text, so
+                    // just note that there has been changes.
+                    ansi_change = true;
+                    current_style = new_style;
+                }
+            },
+            Token::AnsiFg(val) | Token::XtermFg(val) => {
+                new_style.fg = Some(val.clone());
+                if !current_style.eq(&new_style) {
+                    // If the new style isn't equal to the old, then something changed.
+                    // However, many things might change before we start printing more text, so
+                    // just note that there has been changes.
+                    ansi_change = true;
+                    current_style = new_style;
+                }
+            },
+            Token::AnsiBg(val) | Token::XtermBg(val) => {
+                new_style.bg = Some(val.clone());
+                if !current_style.eq(&new_style) {
+                    // If the new style isn't equal to the old, then something changed.
+                    // However, many things might change before we start printing more text, so
+                    // just note that there has been changes.
+                    ansi_change = true;
+                    current_style = new_style;
+                }
+            },
+        }
+    }
+    out_vec
 }
 
-impl FromStr for EvString {
-    type Err = ();
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let raw_string = String::from(s);
-        let out = Self::from(raw_string);
-        Ok(out)
+// This is named EvString after Evennia's AnsiString, from whence the ANSI color pattern was taken.
+// It is a wrapper around the Thermite AnsiString.
+#[derive(Clone, Debug)]
+pub struct EvString {
+    pub ansi_string: AnsiString,
+    pub raw_string: String
+}
+
+
+impl From<&str> for EvString {
+    fn from(src: &str) -> Self {
+        Self {
+            ansi_string: AnsiString::from(parse_evstring(src)),
+            raw_string: String::from(src)
+        }
     }
 }
 
 impl From<String> for EvString {
-    fn from(raw: String) -> Self {
+    fn from(src: String) -> Self {
         Self {
-            plain: Self::make_plain(&raw),
-            raw
+            ansi_string: AnsiString::from(parse_evstring(&src)),
+            raw_string: src
         }
     }
 }
 
+impl From<EvString> for String {
+    fn from(ev: EvString) -> Self {
+        ev.raw_string
+    }
+}
+
 impl EvString {
-    pub fn new(src: String) -> Self {
-        Self::from(src)
-    }
 
-    fn make_plain(src: &str) -> String {
-        let mut plain = String::new();
-
-        for (tok, span) in Token::lexer(src).spanned() {
-            match tok {
-                Token::Pipe => plain.push_str("|"),
-                Token::Crlf => plain.push_str("\r\n"),
-                Token::Tab => plain.push_str("\t"),
-                Token::Space => plain.push_str(" "),
-                Token::Spaces | Token::Word => {
-                    if let Some(new_text) = &src.slice(span.clone()) {
-                        plain.push_str(new_text);
-                    }
-                }
-                _ => {}
-            }
-        }
-        plain
-    }
-
-    pub fn len(&self) -> usize {
-        self.raw.len() + self.plain.len()
+    pub fn clean(&self) -> String {
+        self.ansi_string.plain()
     }
 
     pub fn width(&self) -> usize {
-        self.plain.chars().count()
+        self.ansi_string.width()
     }
 
     pub fn render(&self, ansi: bool, xterm256: bool) -> String {
-        // if xterm256 is enabled, this will force-enable ansi.
-        let mut use_ansi = true;
-        if xterm256 {
-            use_ansi = true
+        self.ansi_string.render(ansi, xterm256)
+    }
+
+    pub fn left(&self, width: usize, ansi: bool, xterm256: bool, fill: bool) -> String {
+        self.ansi_string.left(width, ansi, xterm256, fill)
+    }
+
+    pub fn wrap_width(&self, ansi: bool, xterm256: bool, width: usize, fill: bool, truncate: bool) -> Vec<String> {
+        self.ansi_string.wrap_width(ansi, xterm256, width, fill, truncate)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Justify {
+    Left,
+    Right,
+    Center
+}
+
+#[derive(Clone, Debug)]
+pub enum Wrap {
+    Truncate,
+    WordWrap,
+}
+
+#[derive(Clone, Debug)]
+pub struct EvCell {
+    pub justify: Justify,
+    pub wrap: Wrap,
+    text: EvString,
+    pub width: usize,
+}
+
+impl From<EvString> for EvCell {
+    fn from(src: EvString) -> Self {
+        Self {
+            justify: Justify::Left,
+            // There is effectively no difference here between 'wrap' and 'no wrap'.
+            // Nobody is gonna make a string this big.
+            wrap: Wrap::WordWrap,
+            width: src.width(),
+            text: src
         }
+    }
+}
 
-        if !use_ansi {
-            // There is no reason to render ANYTHING if there's no ANSI, so just
-            // return plain.
-            return self.plain.clone();
-        }
+impl From<String> for EvCell {
+    fn from(src: String) -> Self {
+        Self::from(EvString::from(src))
+    }
+}
 
-        let mut parent_aspan = AnsiSpan::new();
-        let mut out = String::new();
+impl EvCell {
+    pub fn render(&mut self, ansi: bool, xterm256: bool) -> Vec<String> {
+        let mut vec_out: Vec<String> = Default::default();
 
-        for (tok, span) in Token::lexer(&self.raw).spanned() {
-            let mut child_aspan = parent_aspan.clone();
+        let mut lines: Vec<String> = Default::default();
 
-            match tok {
-                Token::Pipe => out.push_str("|"),
-                Token::Crlf => out.push_str("\r\n"),
-                Token::Tab => out.push_str("\t"),
-                Token::Space => out.push_str(" "),
-                Token::Spaces | Token::Word => {
-                    if let Some(new_text) = self.raw.slice(span.clone()) {
-                        out.push_str(new_text);
-                    }
-                },
-                Token::Reset => child_aspan.reset(),
-                Token::Hilite => child_aspan.hilite = true,
-                Token::Inverse => child_aspan.inverse = true,
-                Token::Blink => child_aspan.blink = true,
-                Token::Italic => child_aspan.italic = true,
-                Token::Strikethrough => child_aspan.strike = true,
-                Token::Underline => child_aspan.underline = true,
-                Token::AnsiFg(val) => child_aspan.fg = Some(val.clone()),
-                Token::AnsiBg(val) => child_aspan.bg = Some(val.clone()),
-                Token::XtermBg(val) => {
-                    if !xterm256 {
-                        // Not sure what to do here yet...
-                    } else {
-                        child_aspan.bg = Some(val.clone())
-                    }
-                },
-                Token::XtermFg(val) => {
-                    if !xterm256 {
-                        // Not sure what to do here yet...
-                    } else {
-                        child_aspan.fg = Some(val.clone())
-                    }
-                }
-                _ => {}
+        match self.wrap {
+            Wrap::WordWrap => {
+                lines = self.text.wrap_width(ansi, xterm256, self.width, false, false);
+            },
+            Wrap::Truncate => {
+                let line = self.text.left(self.width, ansi, xterm256, false);
+                lines.push(line);
             }
-
-            if !parent_aspan.eq(&child_aspan) {
-                out.push_str(&child_aspan.difference(&child_aspan));
-                parent_aspan = child_aspan;
-            }
-
         }
-        out
+        // We can trust that each line can fit within 'width' characters.
+        vec_out
+    }
+
+    pub fn contents(&self) -> EvString {
+        self.text.clone()
     }
 }
 
@@ -343,12 +442,11 @@ pub enum EvFormatRow {
     FormatRules(EvFormatRules),
     // Text columns are a Vec<EvString>. This is because the number of columns is
     // arbitrary
-    ColumnNames(Vec<EvString>),
-    Columns(Vec<EvString>),
+    Columns(Vec<Option<EvCell>>),
     Header(Option<EvString>),
     Subheader(Option<EvString>),
     Separator(Option<EvString>),
-    Text(Option<EvString>),
+    Text(EvCell),
 }
 
 impl EvFormatRow {
@@ -357,9 +455,7 @@ impl EvFormatRow {
 
         match self {
             Self::Text(val) => {
-                if let Some(val) = val {
-                    out.push_str(&val.render(rules.ansi, rules.xterm256));
-                }
+                out.push_str(&val.clone().render(rules.ansi, rules.xterm256).join("\r\n"));
             },
             _ => {
 
@@ -378,10 +474,10 @@ pub struct EvFormatStack {
 }
 
 impl EvFormatStack {
-    pub fn new(rules: &impl ToFormatRules) -> Self {
+    pub fn new(rules: EvFormatRules) -> Self {
         Self {
             rows: Default::default(),
-            rules: rules.rules()
+            rules: rules
         }
     }
 

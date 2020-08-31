@@ -19,3 +19,7 @@ pub fn random_alphanum(length: usize) -> String {
         .take(length)
         .collect()
 }
+
+pub fn repeat_string(src: &str, count: usize) -> String {
+    iter::repeat(src).take(count).collect::<String>()
+}
