@@ -10,37 +10,31 @@ pub enum TelnetState {
 
 // Line was definitely a line.
 // Data byte by byte application data... bad news for me.
-#[derive(Clone)]
-pub enum TelnetReceive {
-    Line(Vec<u8>),
+#[derive(Clone, Debug)]
+pub enum TelnetEvent {
+    Negotiate(u8, u8),
+    Line(String),
+    Prompt(String),
+    SubNegotiate(u8, BytesMut),
     Data(u8),
-    Will(u8),
-    Wont(u8),
-    Do(u8),
-    Dont(u8),
-    Sub((u8, Vec<u8>))
-}
-
-pub enum TelnetSend {
-    Data(Vec<u8>),
-    Line(Vec<u8>),
-    Prompt(Vec<u8>),
-    Sub((u8, Vec<u8>)),
-    Command((u8, u8)),
-    RawBytes(Vec<u8>)
+    // This is width
+    NAWS(u16, u16),
+    TTYPE(String),
+    Command(u8),
 }
 
 pub enum IacSection {
-    Command((u8, u8)),
+    Negotiate(u8, u8),
     IAC,
     Pending,
     Error,
-    SE
+    SE,
+    Command(u8)
 }
 
 pub struct TelnetCodec {
-    sub_data: Vec<u8>,
-    app_data: Vec<u8>,
+    sub_data: BytesMut,
+    app_data: BytesMut,
     line_mode: bool,
     state: TelnetState,
     mccp2: bool,
@@ -53,10 +47,10 @@ pub enum SubState {
 }
 
 impl TelnetCodec {
-    pub fn new(line_mode: bool) -> Self {
+    pub fn new(line_mode: bool, max_read_buffer: usize) -> Self {
         TelnetCodec {
-            app_data: Vec::with_capacity(1024),
-            sub_data: Vec::with_capacity(1024),
+            app_data: BytesMut::with_capacity(max_read_buffer),
+            sub_data: BytesMut::with_capacity(max_read_buffer),
             line_mode,
             state: TelnetState::Data,
             mccp2: false,
@@ -66,7 +60,7 @@ impl TelnetCodec {
 }
 
 impl TelnetCodec {
-    fn try_parse_iac(&mut self, bytes: &[u8]) -> (IacSection, usize) {
+    fn try_parse_iac(&mut self, bytes: impl Buf) -> (IacSection, usize) {
         if bytes.len() < 2 {
             return (IacSection::Pending, 0);
         };
@@ -78,36 +72,25 @@ impl TelnetCodec {
 
         match bytes[1] {
             codes::IAC => (IacSection::IAC, 2),
-            codes::SE => {
-                // This is the only way to ensure the next decode() is decompressed without
-                // waiting for the Protocol to acknowledge it.
-                match self.state {
-                    TelnetState::Sub(op) => {
-                        if op == codes::MCCP3 {
-                            self.mccp3 = true;
-                        }
-                    },
-                    _ => {}
-                }
-                return (IacSection::SE, 2);
-            },
+            codes::SE => (IacSection::SE, 2),
             codes::WILL | codes::WONT | codes::DO | codes::DONT | codes::SB => {
                 if bytes.len() < 3 {
                     // No further IAC sequences are valid without at least 3 bytes so...
-                    return (IacSection::Pending, 0);
+                    (IacSection::Pending, 0)
+                } else {
+                    (IacSection::Negotiate(bytes[1], bytes[2]), 3)
                 }
-                return (IacSection::Command((bytes[1], bytes[2])), 3);
             }
             _ => {
                 // Still working on this part. Got more commands to enable...
-                return (IacSection::Error, 0)
+                (IacSection::Error, 0)
             }
         }
     }
 }
 
 impl Decoder for TelnetCodec {
-    type Item = TelnetReceive;
+    type Item = TelnetEvent;
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
@@ -127,12 +110,9 @@ impl Decoder for TelnetCodec {
                     IacSection::Error => {
 
                     },
-                    IacSection::Command((comm, op)) => {
+                    IacSection::Negotiate(comm, op) => {
                         match comm {
-                            codes::WILL => return Ok(Some(TelnetReceive::Will(op))),
-                            codes::WONT => return Ok(Some(TelnetReceive::Wont(op))),
-                            codes::DO => return Ok(Some(TelnetReceive::Do(op))),
-                            codes::DONT => return Ok(Some(TelnetReceive::Dont(op))),
+                            codes::WILL | codes::WONT | codes::DO | codes::DONT => return Ok(Some(TelnetEvent::Negotiate(comm, op))),
                             codes::SB => {
                                 match self.state {
                                     TelnetState::Data => {
@@ -149,18 +129,47 @@ impl Decoder for TelnetCodec {
                     IacSection::IAC => {
                         self.app_data.push(codes::IAC);
                     },
+                    IacSection::Command(op) => return Ok(Some(TelnetEvent::Command(op))),
                     IacSection::SE => {
                         match self.state {
                             TelnetState::Sub(op) => {
-                                let msg = TelnetReceive::Sub((op, self.sub_data.clone()));
+                                // Most sub-negotiation will happen application-side, but we can do
+                                // some standard feature supports here.
+                                let mut answer: Option<TelnetEvent> = None;
+                                match op {
+                                    codes::NAWS => {
+                                        // NAWS must be 4 bytes that can be converted to u16s.
+                                        // Reject malformed NAWS.
+                                        if self.sub_data.len() == 4 {
+                                            let (width, height) = self.sub_data.split_at(2);
+                                            let width = u16::from_be_bytes(width.unwrap());
+                                            let height = u16::from_be_bytes(height.unwrap());
+                                            answer = Some(TelnetEvent::NAWS(width, height))
+                                        }
+                                    },
+                                    codes::TTYPE => {
+                                        // Type data is always a 0 byte followed by an ASCII string.
+                                        // Reject anything that doesn't follow this pattern.
+                                        if self.sub_data.len() > 2 {
+                                            // The first byte is 0, the rest must be a string. If
+                                            // we don't have at least two bytes we cannot proceed.
+                                            let (is, info) = data.split_at(1);
+                                            if is[0] == 0 {
+                                                // If 'is' isn't 0, this is improper and we will not
+                                                // bother converting to string.
+                                                let mut incoming = String::from("");
+                                                if let Ok(conv) = String::from_utf8(Vec::from(info)) {
+                                                    answer = Some(TelnetEvent::TTYPE(conv));
+                                                }
+                                            }
+                                        }
+                                    },
+                                    // This is either unrecognized or app-specific.
+                                    _ => Some(TelnetEvent::SubNegotiate(op, self.sub_data.clone()))
+                                }
                                 self.sub_data.clear();
                                 self.state = TelnetState::Data;
-                                // MCCP3 must be enabled on the encoder immediately after receiving
-                                // an IAC SB MCCP3 IAC SE.
-                                if op == codes::MCCP3 {
-                                    //self.mccp3 = true;
-                                }
-                                return Ok(Some(msg));
+                                return Ok(answer);
                             },
                             _ => {
                                 self.app_data.push(codes::SE);
@@ -179,9 +188,13 @@ impl Decoder for TelnetCodec {
 
                                 },
                                 codes::LF => {
-                                    let line = self.app_data.to_vec();
+                                    // Attempt to convert our data to string and send it.
+                                    let mut answer: Option<TelnetEvent> = None;
+                                    if let Ok(conv) = String::from_utf8(self.app_data.to_vec()) {
+                                        answer = Some(TelnetEvent::Line(conv));
+                                    }
                                     self.app_data.clear();
-                                    return Ok(Some(TelnetReceive::Line(line)));
+                                    return Ok(answer);
                                 },
                                 _ => {
                                     self.app_data.push(byte);
@@ -189,7 +202,7 @@ impl Decoder for TelnetCodec {
                             }
                         } else {
                             // I really don't wanna be using data mode.. ever.
-                            return Ok(Some(TelnetReceive::Data(byte)));
+                            return Ok(Some(TelnetEvent::Data(byte)));
                         }
                     },
                     TelnetState::Sub(op) => {
