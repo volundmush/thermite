@@ -1,16 +1,12 @@
 
 use std::{
-    str::FromStr,
     collections::HashMap,
     iter::repeat
 };
 
 use regex::Regex;
-use futures::StreamExt;
-use logos::{Logos, Lexer, Span, Source};
-//use unicode_segmentation::UnicodeSegmentation;
 
-use crate::repeat_string;
+//use unicode_segmentation::UnicodeSegmentation;
 
 pub fn strip_ansi(src: &str) -> String {
     let stripper = Regex::new("\x1b\\[\\S*?m").unwrap();

@@ -17,10 +17,6 @@ use std::{
     time::Duration
 };
 
-use flate2::{
-    Compression,
-    write::{ZlibEncoder, ZlibDecoder}
-};
 
 use bytes::{BytesMut, Buf, BufMut};
 
@@ -30,7 +26,7 @@ use futures::{
 };
 
 use crate::conn::{Msg2Portal, Msg2SessionManager, Msg2Protocol, Msg2Session, ClientInfo, ClientCapabilities, ProtocolType};
-use thermite_telnet::{TelnetCodec, codes as tc};
+use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent};
 
 #[derive(Default)]
 pub struct TelnetOptionPerspective {

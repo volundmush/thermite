@@ -3,7 +3,7 @@ use bytes::{BytesMut, Buf, BufMut};
 use std::io;
 use crate::codes;
 
-pub enum TelnetState {
+enum TelnetState {
     Data,
     Sub(u8),
 }
@@ -17,13 +17,13 @@ pub enum TelnetEvent {
     Prompt(String),
     SubNegotiate(u8, BytesMut),
     Data(u8),
-    // This is width
+    // This is width then height
     NAWS(u16, u16),
     TTYPE(String),
     Command(u8),
 }
 
-pub enum IacSection {
+enum IacSection {
     Negotiate(u8, u8),
     IAC,
     Pending,
@@ -36,14 +36,7 @@ pub struct TelnetCodec {
     sub_data: BytesMut,
     app_data: BytesMut,
     line_mode: bool,
-    state: TelnetState,
-    mccp2: bool,
-    mccp3: bool
-}
-
-pub enum SubState {
-    Data,
-    Escaped
+    state: TelnetState
 }
 
 impl TelnetCodec {
@@ -53,8 +46,6 @@ impl TelnetCodec {
             sub_data: BytesMut::with_capacity(max_read_buffer),
             line_mode,
             state: TelnetState::Data,
-            mccp2: false,
-            mccp3: false
         }
     }
 }

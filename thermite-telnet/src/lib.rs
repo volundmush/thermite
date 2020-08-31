@@ -1,3 +1,3 @@
 pub mod codes;
 mod codec;
-pub use codec::TelnetCodec;
+pub use codec::{TelnetCodec, TelnetEvent};
