@@ -21,7 +21,7 @@ use thermite_util::text::{
 use std::collections::HashSet;
 
 
-pub enum Msg2Protocol {
+pub enum Msg2Connection {
     Kill,
     Disconnect(Option<String>),
     ProtocolReady,
@@ -127,7 +127,7 @@ pub struct ConnectionLink {
     pub addr: SocketAddr,
     pub conn_id: String,
     pub protocol: String,
-    pub tx_protocol: Sender<Msg2Protocol>,
+    pub tx_protocol: Sender<Msg2Connection>,
 }
 
 #[derive(Clone)]
@@ -136,7 +136,7 @@ pub struct ClientInfo {
     pub addr: SocketAddr,
     pub tls: bool,
     pub protocol: String,
-    pub tx_protocol: Sender<Msg2Protocol>
+    pub tx_protocol: Sender<Msg2Connection>
 }
 
 #[derive(Clone)]
@@ -197,7 +197,7 @@ impl Portal {
                             v.tx_listener.send(Msg2Listener::Kill).await;
                         }
                         for (_k, v) in self.connections.iter_mut() {
-                            v.tx_protocol.send(Msg2Protocol::Kill).await;
+                            v.tx_protocol.send(Msg2Connection::Kill).await;
                         }
                         break;
                     },

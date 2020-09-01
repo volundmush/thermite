@@ -5,5 +5,5 @@ pub use net::{
     Portal,
     Msg2Portal,
     Msg2Factory,
-    Msg2Protocol
+    Msg2Connection
 };
