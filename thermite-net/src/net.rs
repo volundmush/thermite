@@ -136,8 +136,6 @@ pub enum Msg2Portal {
 
 pub struct Portal {
     listeners: HashMap<String, ListenerLink>,
-    connections: HashMap<String, ConnectionLink>,
-    used_ids: HashSet<String>,
     factories: HashMap<String, FactoryLink>,
     pub tx_portal: Sender<Msg2Portal>,
     rx_portal: Receiver<Msg2Portal>,
@@ -150,7 +148,6 @@ impl Portal {
 
         Self {
             listeners: Default::default(),
-            used_ids: Default::default(),
             factories: Default::default(),
             tx_portal,
             rx_portal,
