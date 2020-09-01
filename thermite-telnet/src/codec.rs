@@ -302,13 +302,15 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 }
                 dst.reserve(data.len());
                 dst.put(data.as_bytes());
-            }
+            },
             TelnetEvent::Prompt(data) => {
                 // Not sure what to do about prompts yet.
             },
             TelnetEvent::Negotiate(comm, op) => {
                 dst.reserve(3);
-                dst.put(vec![codes::IAC, comm, op]);
+                dst.put_u8(codes::IAC);
+                dst.put_u8(comm);
+                dst.put_u8(op);
             },
             TelnetEvent::SubNegotiate(op, mut data) => {
                 dst.reserve(5 + data.len());
@@ -337,6 +339,14 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 dst.put(data.as_bytes());
                 dst.put_u8(codes::IAC);
                 dst.put_u8(codes::SE);
+            },
+            TelnetEvent::Command(byte) => {
+                dst.reserve(2);
+                dst.put_u8(codes::IAC);
+                dst.put_u8(byte);
+            }
+            TelnetEvent::Error(err) => {
+
             }
         }
         Ok(())

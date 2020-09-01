@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 textwrap = {version = "0.12", features = ["hyphenation"]}
+vtparse = "0.2"
