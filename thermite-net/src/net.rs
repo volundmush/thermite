@@ -15,18 +15,10 @@ use tokio_rustls::{
     server::TlsStream
 };
 
-use crate::{
-    telnet::TelnetProtocol,
-    websocket::WebSocketProtocol,
+use thermite_util::text::{
     random_alphanum
 };
-
-
-#[derive(Clone)]
-pub enum ProtocolType {
-    Telnet,
-    WebSocket
-}
+use std::collections::HashSet;
 
 
 pub enum Msg2Protocol {
@@ -43,23 +35,23 @@ pub enum Msg2Listener {
 
 
 pub struct Listener {
-    pub listen_id: String,
-    pub listener: TcpListener,
-    pub addr: SocketAddr,
-    pub protocol: ProtocolType,
-    pub tls_acceptor: Option<TlsAcceptor>,
-    pub rx_listener: Receiver<Msg2Listener>,
+    listen_id: String,
+    listener: TcpListener,
+    addr: SocketAddr,
+    factory: String,
+    tls_acceptor: Option<TlsAcceptor>,
+    rx_listener: Receiver<Msg2Listener>,
     pub tx_listener: Sender<Msg2Listener>,
-    pub tx_portal: Sender<Msg2Portal>
+    tx_portal: Sender<Msg2Portal>
 }
 
 impl Listener {
-    pub fn new(listener: TcpListener, addr: SocketAddr, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_portal: Sender<Msg2Portal>, protocol: ProtocolType) -> Self {
+    pub fn new(listener: TcpListener, addr: SocketAddr, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_portal: Sender<Msg2Portal>, factory: &String) -> Self {
         let (tx_listener, rx_listener) = channel(50);
         Self {
             listen_id,
             tx_portal,
-            protocol,
+            factory: factory.clone(),
             tls_acceptor,
             listener,
             addr,
@@ -90,14 +82,14 @@ impl Listener {
                                     let c_acc = acc.clone();
                                     if let Ok(tls_stream) = c_acc.accept(tcp_stream).await {
 
-                                        self.tx_portal.send(Msg2Portal::NewTlsConnection(tls_stream, addr, self.protocol.clone())).await;
+                                        self.tx_portal.send(Msg2Portal::AcceptTLS(tls_stream, addr, self.factory.clone())).await;
                                     } else {
                                         // Not sure what to do if TLS fails...
                                     }
                                 },
                                 Option::None => {
                                     // TLS is not engaged.
-                                    self.tx_portal.send(Msg2Portal::NewTcpConnection(tcp_stream, addr, self.protocol.clone())).await;
+                                    self.tx_portal.send(Msg2Portal::AcceptTCP(tcp_stream, addr, self.factory.clone())).await;
                                 }
                             }
                         },
@@ -109,12 +101,22 @@ impl Listener {
             }
         }
     }
+}
 
+pub enum Msg2Factory {
+    AcceptTCP(String, TcpStream, SocketAddr),
+    AcceptTLS(String, TlsStream<TcpStream>, SocketAddr),
+    Kill
+}
+
+pub struct FactoryLink {
+    pub factory_id: String,
+    pub tx_factory: Sender<Msg2Factory>
 }
 
 pub struct ListenerLink {
     pub listen_id: String,
-    pub listen_type: ProtocolType,
+    pub factory: String,
     pub addr: SocketAddr,
     pub tls: bool,
     pub handle: JoinHandle<()>,
@@ -124,49 +126,8 @@ pub struct ListenerLink {
 pub struct ConnectionLink {
     pub addr: SocketAddr,
     pub conn_id: String,
-    pub protocol: ProtocolType,
-    pub handle: JoinHandle<()>,
+    pub protocol: String,
     pub tx_protocol: Sender<Msg2Protocol>,
-}
-
-impl ConnectionLink {
-    pub fn new(conn_id: String, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync,
-               addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>, protocol: ProtocolType,
-               tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
-        let (tx_protocol, rx_protocol) = channel(50);
-
-        match protocol {
-            ProtocolType::Telnet => {
-                let mut tel_prot = TelnetProtocol::new(conn_id.clone(),
-                                                       conn, addr.clone(), tls, tx_protocol.clone(), rx_protocol,
-                                                       tx_portal.clone(), tx_sessmanager);
-                let handle = tokio::spawn(async move {tel_prot.run().await;});
-
-                Self {
-                    addr,
-                    conn_id,
-                    protocol,
-                    handle,
-                    tx_protocol
-                }
-
-            },
-            ProtocolType::WebSocket => {
-                let mut web_prot = WebSocketProtocol {};
-                let handle = tokio::spawn(async move {web_prot.run().await});
-
-                Self {
-                    addr,
-                    conn_id,
-                    protocol,
-                    handle,
-                    tx_protocol
-                }
-
-            }
-        }
-
-    }
 }
 
 #[derive(Clone)]
@@ -174,7 +135,7 @@ pub struct ClientInfo {
     pub conn_id: String,
     pub addr: SocketAddr,
     pub tls: bool,
-    pub protocol: ProtocolType,
+    pub protocol: String,
     pub tx_protocol: Sender<Msg2Protocol>
 }
 
@@ -192,18 +153,21 @@ pub struct ClientCapabilities {
     pub screen_reader: bool
 }
 
-
 pub enum Msg2Portal {
     Kill,
     DisconnectClient(String, Option<String>),
-    NewTcpConnection(TcpStream, SocketAddr, ProtocolType),
-    NewTlsConnection(TlsStream<TcpStream>, SocketAddr, ProtocolType)
+    AcceptTCP(TcpStream, SocketAddr, String),
+    AcceptTLS(TlsStream<TcpStream>, SocketAddr, String),
+    NewLink(ConnectionLink)
 }
+
 
 pub struct Portal {
     listeners: HashMap<String, ListenerLink>,
     connections: HashMap<String, ConnectionLink>,
-    tx_portal: Sender<Msg2Portal>,
+    used_ids: HashSet<String>,
+    factories: HashMap<String, FactoryLink>,
+    pub tx_portal: Sender<Msg2Portal>,
     rx_portal: Receiver<Msg2Portal>,
     tx_sessmanager: Sender<Msg2SessionManager>
 }
@@ -215,6 +179,8 @@ impl Portal {
         Self {
             listeners: Default::default(),
             connections: Default::default(),
+            used_ids: Default::default(),
+            factories: Default::default(),
             tx_portal,
             rx_portal,
             tx_sessmanager
@@ -238,55 +204,61 @@ impl Portal {
                     Msg2Portal::DisconnectClient(conn_id, reason) => {
                         // the Portal has been instructed to arbitrarily terminate one of its clients.
                     },
-                    Msg2Portal::NewTcpConnection(stream, addr, protocol) => {
-                        self.accept(stream, addr, false, protocol);
+                    Msg2Portal::AcceptTCP(stream, addr, factory) => {
+                        let new_id = self.generate_id();
+                        if let Some(factory) = self.factories.get_mut(&factory) {
+                            factory.tx_factory.send(Msg2Factory::AcceptTCP(new_id, stream, addr)).await;
+                        }
                     },
-                    Msg2Portal::NewTlsConnection(stream, addr, protocol) => {
-                        self.accept(stream, addr, true, protocol);
+                    Msg2Portal::AcceptTLS(stream, addr, factory) => {
+                        let new_id = self.generate_id();
+                        if let Some(factory) = self.factories.get_mut(&factory) {
+                            factory.tx_factory.send(Msg2Factory::AcceptTLS(new_id, stream, addr)).await;
+                        }
                     },
+                    Msg2Portal::NewLink(link) => {
+                        self.connections.insert(link.conn_id.clone(), link);
+                    }
                 }
             }
         }
     }
+    pub fn register_factory(&mut self, factory: FactoryLink) {
+        self.factories.insert(factory.factory_id.clone(), factory);
+    }
 
-    pub fn listen(&mut self, listen_id: String, listener: TcpListener, tls: Option<TlsAcceptor>, protocol: ProtocolType) {
+    pub fn listen(&mut self, listen_id: String, listener: TcpListener, tls: Option<TlsAcceptor>, protocol: &String) {
         if self.listeners.contains_key(&listen_id) {
+            return;
+        }
+        if !self.factories.contains_key(protocol) {
             return;
         }
         let addr = listener.local_addr().unwrap();
 
-        let mut tls_bool = false;
-        if let Some(tls_check) = &tls {
-            tls_bool = true;
-        }
+        let tls_bool = tls.is_some();
 
-        let mut listener = Listener::new(listener, addr.clone(), tls, listen_id.clone(), self.tx_portal.clone(), protocol.clone());
+        let mut listener = Listener::new(listener, addr.clone(), tls.clone(), listen_id.clone(), self.tx_portal.clone(), protocol);
         let tx_listener = listener.tx_listener.clone();
 
         let handle = tokio::spawn(async move {listener.run().await});
 
-
-        let mut listen_stub = ListenerLink {
+        let mut listen_link = ListenerLink {
             addr,
             listen_id: listen_id.clone(),
-            listen_type: protocol,
+            factory: protocol.clone(),
             handle,
             tx_listener,
             tls: tls_bool
         };
-        self.listeners.insert(listen_id, listen_stub);
+        self.listeners.insert(listen_id, listen_link);
     }
 
-    fn accept(&mut self, conn: impl AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync, addr: SocketAddr, tls: bool, protocol: ProtocolType) {
-        let new_id = self.generate_id();
-        let conn_data = ConnectionLink::new(new_id.clone(), conn, addr, tls, self.tx_portal.clone(), protocol, self.tx_sessmanager.clone());
-        self.connections.insert(new_id, conn_data);
-    }
-
-    fn generate_id(&self) -> String {
+    fn generate_id(&mut self) -> String {
         loop {
             let new_id: String = random_alphanum(16);
-            if !self.connections.contains_key(&new_id) {
+            if !self.used_ids.contains(&new_id) {
+                self.used_ids.insert(new_id.clone());
                 return new_id;
             }
         }

@@ -9,6 +9,8 @@
       <sourceFolder url="file://$MODULE_DIR$/thermite-telnettls/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/thermite/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/thermite-util/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/thermite-lib/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/thermite-net/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/thermite-telnet/target" />
       <excludeFolder url="file://$MODULE_DIR$/thermite-telnetlib/target" />

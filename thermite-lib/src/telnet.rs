@@ -18,7 +18,7 @@ use std::{
 };
 
 
-use bytes::{BytesMut, Buf, BufMut};
+use bytes::{BytesMut, Bytes};
 
 use futures::{
     sink::{SinkExt},
@@ -275,7 +275,6 @@ impl<T> TelnetProtocol<T> where
                     }
                 }
             }
-            
         }
     }
 
