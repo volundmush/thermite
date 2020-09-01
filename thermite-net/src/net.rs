@@ -15,18 +15,8 @@ use tokio_rustls::{
     server::TlsStream
 };
 
-use thermite_util::text::{
-    random_alphanum
-};
+
 use std::collections::HashSet;
-
-
-pub enum Msg2Connection {
-    Kill,
-    Disconnect(Option<String>),
-    ProtocolReady,
-    SessionReady(Sender<Msg2Session>)
-}
 
 
 pub enum Msg2Listener {
@@ -104,8 +94,8 @@ impl Listener {
 }
 
 pub enum Msg2Factory {
-    AcceptTCP(String, TcpStream, SocketAddr),
-    AcceptTLS(String, TlsStream<TcpStream>, SocketAddr),
+    AcceptTCP(TcpStream, SocketAddr),
+    AcceptTLS(TlsStream<TcpStream>, SocketAddr),
     Kill
 }
 
@@ -121,22 +111,6 @@ pub struct ListenerLink {
     pub tls: bool,
     pub handle: JoinHandle<()>,
     pub tx_listener: Sender<Msg2Listener>,
-}
-
-pub struct ConnectionLink {
-    pub addr: SocketAddr,
-    pub conn_id: String,
-    pub protocol: String,
-    pub tx_protocol: Sender<Msg2Connection>,
-}
-
-#[derive(Clone)]
-pub struct ClientInfo {
-    pub conn_id: String,
-    pub addr: SocketAddr,
-    pub tls: bool,
-    pub protocol: String,
-    pub tx_protocol: Sender<Msg2Connection>
 }
 
 #[derive(Clone)]
@@ -155,10 +129,8 @@ pub struct ClientCapabilities {
 
 pub enum Msg2Portal {
     Kill,
-    DisconnectClient(String, Option<String>),
     AcceptTCP(TcpStream, SocketAddr, String),
-    AcceptTLS(TlsStream<TcpStream>, SocketAddr, String),
-    NewLink(ConnectionLink)
+    AcceptTLS(TlsStream<TcpStream>, SocketAddr, String)
 }
 
 
@@ -178,7 +150,6 @@ impl Portal {
 
         Self {
             listeners: Default::default(),
-            connections: Default::default(),
             used_ids: Default::default(),
             factories: Default::default(),
             tx_portal,
@@ -201,24 +172,16 @@ impl Portal {
                         }
                         break;
                     },
-                    Msg2Portal::DisconnectClient(conn_id, reason) => {
-                        // the Portal has been instructed to arbitrarily terminate one of its clients.
-                    },
                     Msg2Portal::AcceptTCP(stream, addr, factory) => {
-                        let new_id = self.generate_id();
                         if let Some(factory) = self.factories.get_mut(&factory) {
-                            factory.tx_factory.send(Msg2Factory::AcceptTCP(new_id, stream, addr)).await;
+                            factory.tx_factory.send(Msg2Factory::AcceptTCP(stream, addr)).await;
                         }
                     },
                     Msg2Portal::AcceptTLS(stream, addr, factory) => {
-                        let new_id = self.generate_id();
                         if let Some(factory) = self.factories.get_mut(&factory) {
-                            factory.tx_factory.send(Msg2Factory::AcceptTLS(new_id, stream, addr)).await;
+                            factory.tx_factory.send(Msg2Factory::AcceptTLS(stream, addr)).await;
                         }
                     },
-                    Msg2Portal::NewLink(link) => {
-                        self.connections.insert(link.conn_id.clone(), link);
-                    }
                 }
             }
         }
@@ -253,29 +216,4 @@ impl Portal {
         };
         self.listeners.insert(listen_id, listen_link);
     }
-
-    fn generate_id(&mut self) -> String {
-        loop {
-            let new_id: String = random_alphanum(16);
-            if !self.used_ids.contains(&new_id) {
-                self.used_ids.insert(new_id.clone());
-                return new_id;
-            }
-        }
-    }
-}
-
-// Thermite lib does not actually implement a Session Manager. Just the means by which protocols can
-// communicate with a SessionManager and Sessions.
-pub enum Msg2SessionManager {
-    Kill,
-    ClientReady(String, ClientInfo, ClientCapabilities),
-    ClientDisconnected(Option<String>),
-}
-
-pub enum Msg2Session {
-    Kill,
-    ClientCommand(String),
-    ClientDisconnected(Option<String>),
-    ClientCapabilities(ClientCapabilities)
 }

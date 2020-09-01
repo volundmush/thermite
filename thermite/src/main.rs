@@ -37,6 +37,26 @@ use thermite::config::{Config, ServerConfig as ThermiteServer};
 use thermite::db::DbManager;
 use std::str::FromStr;
 
+use thermite::telnet::{TelnetOption};
+use thermite_telnet::{codes as tc};
+
+fn teloptions() -> HashMap<u8, TelnetOption> {
+    let mut map: HashMap<u8, TelnetOption> = Default::default();
+
+    map.insert(tc::SGA, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map.insert(tc::NAWS, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
+    map.insert(tc::TTYPE, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
+    //map.insert(tc::MXP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map.insert(tc::MSSP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map.insert(tc::MCCP2, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    //map.insert(tc::MCCP3, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map.insert(tc::GMCP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map.insert(tc::MSDP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map.insert(tc::LINEMODE, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
+    map.insert(tc::TELOPT_EOR, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map
+}
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
