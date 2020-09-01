@@ -25,8 +25,9 @@ use futures::{
     stream::{StreamExt}
 };
 
-use crate::conn::{Msg2Portal, Msg2SessionManager, Msg2Protocol, Msg2Session, ClientInfo, ClientCapabilities, ProtocolType};
+use thermite_net::conn::{Msg2Portal, Msg2Connection};
 use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent};
+
 
 #[derive(Default)]
 pub struct TelnetOptionPerspective {
