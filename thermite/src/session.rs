@@ -1,157 +1,74 @@
-use std::{
-    net::SocketAddr,
-    collections::HashMap,
-    error::Error
-};
-
 use tokio::{
     prelude::*,
-    sync::mpsc::{channel, Receiver, Sender},
-    task::JoinHandle
+    sync::mpsc::{Receiver, Sender, channel},
 };
 
-use thermite_lib::conn::{
-    Msg2SessionManager,
-    Msg2Portal,
-    Msg2Protocol,
-    Msg2Session,
-    ClientInfo,
-    ClientCapabilities
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
 };
 
-pub struct Session {
-    conn_id: String,
-    tx_session: Sender<Msg2Session>,
-    rx_session: Receiver<Msg2Session>,
-    info: ClientInfo,
-    capabilities: ClientCapabilities,
-    tx_sessmanager: Sender<Msg2SessionManager>
-}
-
-impl Session {
-    pub fn new(conn_id: String, info: ClientInfo, capabilities: ClientCapabilities,
-               tx_session: Sender<Msg2Session>, rx_session: Receiver<Msg2Session>,
-               tx_sessmanager: Sender<Msg2SessionManager>) -> Self {
-        Self {
-            conn_id,
-            info,
-            capabilities,
-            tx_session,
-            rx_session,
-            tx_sessmanager
-        }
-    }
-
-    pub async fn run(&mut self) {
-        self.info.tx_protocol.send(Msg2Protocol::SessionReady(self.tx_session.clone())).await;
-
-        loop {
-            if let Some(msg) = self.rx_session.recv().await {
-                match msg {
-                    Msg2Session::Kill => {
-                        break;
-                    }
-                    Msg2Session::ClientCapabilities(capabilities) => {
-                        self.update_capabilities(capabilities).await;
-                    },
-                    Msg2Session::ClientDisconnected(reason) => {
-                        let reason_copy = reason.clone();
-                        if let Some(reason_2) = reason_copy {
-                            println!("Session {} disconnected for reason: {}", self.conn_id, reason_2);
-                        }
-                        self.tx_sessmanager.send(Msg2SessionManager::ClientDisconnected(Some(self.conn_id.clone()))).await;
-                        break;
-                    },
-                    Msg2Session::ClientCommand(command) => {
-                        println!("Session {} received command from protocol: {}", self.conn_id, command);
-                    }
-                }
-            }
-        }
-    }
-
-    async fn update_capabilities(&mut self, capabilities: ClientCapabilities) {
-
-    }
+pub enum Msg2MudSession {
+    Disconnect,
+    Line(String),
+    Prompt(String),
+    Data,
+    MSSP,
+    Ready
 }
 
 pub struct SessionLink {
-    conn_id: String,
-    tx_session: Sender<Msg2Session>,
-    info: ClientInfo,
-    handle: JoinHandle<()>
+    pub conn_id: String,
+    pub addr: SocketAddr,
+    pub tls: bool,
+    pub tx_session: Sender<Msg2MudSession>
 }
 
-impl SessionLink {
-    pub fn new(conn_id: String, info: ClientInfo, capabilities: ClientCapabilities,
-               tx_sessmanager: Sender<Msg2SessionManager>) -> Result<Self, Box<dyn Error>> {
-        let (tx_session, rx_session) = channel(50);
-
-        // RUN SOME CODE HERE... check that IP address for bans for instance.
-        // Return Err() if this connection needs to be kicked.
-
-        let mut session = Session::new(conn_id.clone(), info.clone(),
-                                       capabilities.clone(), tx_session.clone(),
-                                       rx_session, tx_sessmanager);
-
-        let handle = tokio::spawn(async move {session.run().await});
-
-        Ok(Self {
-            conn_id,
-            tx_session,
-            info: info,
-            handle
-        })
-    }
-
-    pub async fn run(&mut self) {
-
-    }
+pub enum Msg2SessionManager {
+    NewSession(SessionLink),
+    SessionCommand(String, String),
+    SessionDisconnected(String),
 }
 
 pub struct SessionManager {
     sessions: HashMap<String, SessionLink>,
-    rx_sessmanager: Receiver<Msg2SessionManager>,
-    tx_sessmanager: Sender<Msg2SessionManager>,
-    tx_portal: Sender<Msg2Portal>
+    pub tx_manager: Sender<Msg2SessionManager>,
+    rx_manager: Receiver<Msg2SessionManager>
 }
 
 impl SessionManager {
-    pub fn new(tx_sessmanager: Sender<Msg2SessionManager>, rx_sessmanager: Receiver<Msg2SessionManager>,
-               tx_portal: Sender<Msg2Portal>) -> Self {
+    pub fn new() -> Self {
+        let (tx_manager, rx_manager) = channel(50);
 
         Self {
             sessions: Default::default(),
-            tx_sessmanager,
-            rx_sessmanager,
-            tx_portal
+            tx_manager,
+            rx_manager
         }
     }
 
     pub async fn run(&mut self) {
         loop {
-            if let Some(msg) = self.rx_sessmanager.recv().await {
+            if let Some(msg) = self.rx_manager.recv().await {
                 match msg {
-                    Msg2SessionManager::Kill => {
-                        for (k, v) in self.sessions.iter_mut() {
-                            v.tx_session.send(Msg2Session::Kill).await;
-                            break;
-                        }
+                    Msg2SessionManager::NewSession(mut link) => {
+                        let welcome = self.welcome_screen(&link);
+                        link.tx_session.send(Msg2MudSession::Line(welcome));
+                        self.sessions.insert(link.conn_id.clone(), link);
                     },
-                    Msg2SessionManager::ClientReady(conn_id, info, capabilities) => {
-                        println!("GOT A CLIENT! {}", conn_id);
-                        if let Ok(link) = SessionLink::new(conn_id.clone(), info, capabilities, self.tx_sessmanager.clone()) {
-                            self.sessions.insert(conn_id, link);
-                        } else {
-                            // This would only happen if SessionLink rejects the connection for some
-                            // reason. Such as a ban.
-                        }
+                    Msg2SessionManager::SessionCommand(conn_id, command) => {
+                        println!("GOT COMMAND FROM {}: {}", conn_id, command);
                     },
-                    Msg2SessionManager::ClientDisconnected(reason) => {
-
+                    Msg2SessionManager::SessionDisconnected(conn_id) => {
+                        println!("SESSION {} DISCONNECTED!", conn_id);
+                        let _ = self.sessions.remove(&conn_id);
                     }
                 }
             }
         }
+    }
+
+    fn welcome_screen(&self, link: &SessionLink) -> String {
+        String::from("NOT MUCH TO SEE YET!")
     }
 }

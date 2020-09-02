@@ -9,4 +9,5 @@ edition = "2018"
 [dependencies]
 tokio = {version = "0.2", features = ["tcp", "dns", "sync", "macros"]}
 tokio-rustls = "0.14"
-thermite-util = {version = "0.1", path = "../thermite-util"}
+futures = "0.3"
+futures-core = "0.3"

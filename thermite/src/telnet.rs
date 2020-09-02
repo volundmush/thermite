@@ -5,7 +5,7 @@ use tokio::{
     task
 };
 
-use tokio_util::codec::{Encoder, Decoder, Framed};
+use tokio_util::codec::{Framed};
 
 
 use std::{
@@ -18,16 +18,17 @@ use std::{
 };
 
 
-use bytes::{BytesMut, Bytes};
+use bytes::{BytesMut, Bytes, BufMut, Buf};
 
 use futures::{
     sink::{SinkExt},
     stream::{StreamExt}
 };
 
-use thermite_net::conn::{Msg2Portal, Msg2Connection, Msg2Factory};
+use thermite_net::{Msg2Factory};
 use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent};
-
+use std::sync::Arc;
+use crate::session::{Msg2SessionManager, Msg2MudSession, SessionLink};
 
 #[derive(Default, Clone)]
 pub struct TelnetOptionPerspective {
@@ -130,31 +131,54 @@ impl TelnetConfig {
     }
 }
 
-pub struct TelnetProtocol<T> {
+pub struct TelnetSession<T> {
     // This serves as a higher-level actor that abstracts a bunch of the lower-level
     // nitty-gritty so the Session doesn't need to deal with it.
     op_state: HashMap<u8, TelnetOptionState>,
     telnet_options: Arc<HashMap<u8, TelnetOption>>,
+    conn_id: String,
+    addr: SocketAddr,
+    tls: bool,
+    handshakes_left: HashSet<u8>,
     conn: Framed<T, TelnetCodec>,
-    pub tx_telnet: Sender<Msg2TelnetProtocol>,
-    rx_telnet: Receiver<Msg2TelnetProtocol>,
-    tx_session: Sender<Msg2MudSession>
+    pub tx_session: Sender<Msg2MudSession>,
+    rx_session: Receiver<Msg2MudSession>,
+    tx_manager: Sender<Msg2SessionManager>
 }
 
 
-impl<T> TelnetProtocol<T> where 
-    T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync
-{
-    pub fn new(conn: Framed<T, TelnetCodec>, tx_telnet: Sender<Msg2TelnetProtocol>,
-        rx_telnet: Receiver<Msg2TelnetProtocol>, tx_session: Sender<Msg2MudSession>, options: Arc<HashMap<u8, TelnetOption>>,
-            op_state: HashMap<u8, TelnetOptionState>) -> Self {
+impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync {
+    pub fn new(conn_id: String, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool,
+               tx_manager: Sender<Msg2SessionManager>, telnet_options: Arc<HashMap<u8, TelnetOption>>,
+               op_state: HashMap<u8, TelnetOptionState>) -> Self {
+
+        let (tx_session, rx_session) = channel(50);
+
+        let mut handshakes_left: HashSet<u8> = Default::default();
+        for (k, v) in op_state.iter() {
+            handshakes_left.insert(k.clone());
+        }
 
         Self {
+            conn_id,
+            addr,
             telnet_options,
             op_state,
-            tx_telnet,
-            rx_telnet,
             conn,
+            handshakes_left,
+            tx_session,
+            rx_session,
+            tx_manager,
+            tls
+        }
+    }
+
+    fn link(&self) -> ConnectionLink {
+        ConnectionLink {
+            conn_id: self.conn_id.clone(),
+            addr: self.addr.clone(),
+            tls: self.tls,
+            tx_session: self.tx_session.clone()
         }
     }
 
@@ -167,7 +191,7 @@ impl<T> TelnetProtocol<T> where
         // Ready a message to fire off quickly for in case
         let mut ready_task = tokio::spawn(async move {
             time::delay_for(Duration::from_millis(500)).await;
-            send_chan.send(Msg2Protocol::ProtocolReady).await;
+            send_chan.send(Msg2MudSession::ProtocolReady).await;
             ()
         });
 
@@ -189,20 +213,26 @@ impl<T> TelnetProtocol<T> where
                         }
                     }
                 },
-                p_msg = self.rx_telnet.recv() => {
+                p_msg = self.rx_session.recv() => {
                     if let Some(msg) = p_msg {
                         match msg {
-                            Msg2Protocol::Kill => {
+                            Msg2MudSession::Disconnect => {
                                 break;
                             },
-                            Msg2Protocol::Disconnect(reason) => {
-                                break;
+                            Msg2MudSession::Line(text) => {
+
                             },
-                            Msg2Protocol::SessionReady(chan) => {
-                                self.tx_session = Some(chan);
+                            Msg2MudSession::Prompt(text) => {
+
                             },
-                            Msg2Protocol::ProtocolReady => {
-                                self.start_session().await;
+                            Msg2MudSession::Data => {
+
+                            },
+                            Msg2MudSession::MSSP => {
+
+                            },
+                            Msg2MudSession::Ready => {
+
                             }
                         }
                     }
@@ -273,7 +303,7 @@ impl<T> TelnetProtocol<T> where
                 tc::WILL => tc::DONT,
                 tc::DO => tc::WONT,
                 _ => 0
-            }
+            };
             if response > 0 {
                 let _ = self.conn.send(TelnetEvent::Negotiate(response, op)).await;
             }
@@ -550,7 +580,7 @@ pub struct TelnetProtocolFactory {
 }
 
 impl TelnetProtocolFactory {
-    pub fn new(tx_portal: Sender<Msg2Portal, options: HashMap<u8, TelnetOption>) -> Self {
+    pub fn new(tx_portal: Sender<Msg2Portal>, options: HashMap<u8, TelnetOption>) -> Self {
         let (tx_factory, rx_factory) = channel(50);
 
         // Since this only needs to be done once... we'll clone it from here.

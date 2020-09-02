@@ -4,7 +4,6 @@ members = [
     "thermite-util",
     "thermite-net",
     "thermite-telnet",
-    "thermite-lib",
     "thermite-ansi",
     "thermite"
 ]

@@ -4,21 +4,18 @@ use diesel::{
     r2d2::{ConnectionManager, Pool}
 };
 
-use thermite_lib::conn::{Portal, ProtocolType};
-use thermite::session::{
-    SessionManager
-};
-
 use tokio::{
     net::TcpListener,
     sync::mpsc::{channel, Receiver, Sender}
 };
+
 use std::{
     env,
     error::Error,
     collections::HashMap,
     net::{IpAddr, SocketAddr}
 };
+
 use tokio_rustls::{
     TlsAcceptor,
     rustls::{
@@ -33,12 +30,17 @@ use tokio_rustls::{
     },
 };
 
-use thermite::config::{Config, ServerConfig as ThermiteServer};
-use thermite::db::DbManager;
+use thermite_lib::conn::{Portal, ProtocolType};
+use thermite_telnet::{codes as tc};
+
+use thermite::{
+    config::{Config, ServerConfig as ThermiteServer},
+    db::DbManager,
+    telnet::TelnetOption,
+    session::SessionManager
+};
 use std::str::FromStr;
 
-use thermite::telnet::{TelnetOption};
-use thermite_telnet::{codes as tc};
 
 fn teloptions() -> HashMap<u8, TelnetOption> {
     let mut map: HashMap<u8, TelnetOption> = Default::default();

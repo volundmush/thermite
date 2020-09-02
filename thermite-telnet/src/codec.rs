@@ -26,7 +26,11 @@ pub enum TelnetEvent {
     NAWS(u16, u16),
     TTYPE(String),
     Command(u8),
-    Error(TelnetError)
+    Error(TelnetError),
+    MCCP2(bool),
+    MCCP3(bool),
+    Compress2(bool),
+    Compress3(bool)
 }
 
 enum IacSection {
@@ -43,6 +47,11 @@ pub struct TelnetCodec {
     state: TelnetState,
     app_data: BytesMut,
     sub_data: BytesMut,
+    in_data: BytesMut,
+    mccp2_enabled: bool,
+    mccp2_compress: bool,
+    mccp3_enabled: bool,
+    mccp3_compress: bool,
 }
 
 impl TelnetCodec {
@@ -57,7 +66,12 @@ impl TelnetCodec {
             line_mode,
             state: TelnetState::Data,
             app_data: BytesMut::with_capacity(capacity),
-            sub_data: BytesMut::with_capacity(max_buffer)
+            sub_data: BytesMut::with_capacity(max_buffer),
+            in_data: BytesMut::with_capacity(max_buffer),
+            mccp2_enabled: false,
+            mccp2_compress: false,
+            mccp3_enabled: false,
+            mccp3_compress: false
         }
     }
 }
@@ -347,7 +361,11 @@ impl Encoder<TelnetEvent> for TelnetCodec {
             }
             TelnetEvent::Error(err) => {
 
-            }
+            },
+            TelnetEvent::MCCP2(val) => self.mccp2_enabled = val,
+            TelnetEvent::MCCP3(val) => self.mccp3_enabled = val,
+            TelnetEvent::Compress2(val) => self.mccp2_compress = val,
+            TelnetEvent::Compress3(val) => self.mccp3_compress = val,
         }
         Ok(())
     }
