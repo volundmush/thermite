@@ -1,7 +1,16 @@
 use tokio_util::codec::{Encoder, Decoder};
 use bytes::{BytesMut, Buf, BufMut, Bytes};
-use std::io;
+use std::{
+    io,
+    io::{Read, Write},
+    collections::HashMap,
+};
 use crate::codes;
+
+use flate2::{
+    write::{ZlibDecoder, ZlibEncoder},
+    Compression,
+};
 
 enum TelnetState {
     Data,
@@ -30,7 +39,9 @@ pub enum TelnetEvent {
     MCCP2(bool),
     MCCP3(bool),
     Compress2(bool),
-    Compress3(bool)
+    Compress3(bool),
+    GMCP(String, String),
+    MSSP(HashMap<String, String>)
 }
 
 enum IacSection {
@@ -44,14 +55,19 @@ enum IacSection {
 
 pub struct TelnetCodec {
     line_mode: bool,
+    max_buffer: usize,
     state: TelnetState,
     app_data: BytesMut,
     sub_data: BytesMut,
     in_data: BytesMut,
+    out_data: BytesMut,
+    zipper: ZlibEncoder<Vec<u8>>,
+    unzipper: ZlibDecoder<Vec<u8>>,
     mccp2_enabled: bool,
     mccp2_compress: bool,
     mccp3_enabled: bool,
     mccp3_compress: bool,
+    mnes_buffer: HashMap<String, String>
 }
 
 impl TelnetCodec {
@@ -68,10 +84,15 @@ impl TelnetCodec {
             app_data: BytesMut::with_capacity(capacity),
             sub_data: BytesMut::with_capacity(max_buffer),
             in_data: BytesMut::with_capacity(max_buffer),
+            out_data: BytesMut::with_capacity(max_buffer),
+            zipper: ZlibEncoder::new(Vec::new(), Compression::best()),
+            unzipper: ZlibDecoder::new(Vec::new()),
+            max_buffer,
             mccp2_enabled: false,
             mccp2_compress: false,
             mccp3_enabled: false,
-            mccp3_compress: false
+            mccp3_compress: false,
+            mnes_buffer: Default::default()
         }
     }
 }
@@ -112,14 +133,45 @@ impl Decoder for TelnetCodec {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
 
+        // src has the bytes from the stream. but we want to optionally decompress it into in_data
+        if src.len() > 0 {
+            if self.mccp3_compress {
+                match self.unzipper.write_all(src.as_ref()) {
+                    Ok(()) => {
+                        self.unzipper.flush();
+                        let zbuf = self.unzipper.get_mut();
+                        if self.in_data.remaining() >= zbuf.len() {
+                            self.in_data.extend(zbuf.as_ref());
+                            zbuf.clear();
+                        } else {
+                            // ERROR!
+                        }
+                    },
+                    Err(e) => {
+                        //
+                    }
+                }
+            } else {
+                if self.in_data.remaining() >= src.len() {
+                    self.in_data.extend(src.as_ref());
+                } else {
+                    // ERROR!
+                }
+            }
+            // By this point, the src data has been completely consumed into self.in_data
+            src.clear();
+        }
+        
+        // #TODO: replace all src refs below with self.in_data
+
         loop {
-            if src.is_empty() {
+            if self.in_data.is_empty() {
                 return Ok(None);
             }
 
-            if src[0] == codes::IAC {
-                let (res, consume) = self.try_parse_iac(src.bytes());
-                src.advance(consume);
+            if self.in_data[0] == codes::IAC {
+                let (res, consume) = self.try_parse_iac(self.in_data.bytes());
+                self.in_data.advance(consume);
 
                 match res {
                     IacSection::Error => {
@@ -197,6 +249,28 @@ impl Decoder for TelnetCodec {
                                             
                                         }
                                     },
+                                    codes::MCCP3 => {
+                                        // Upon receiving IAC SB MCCP3 IAC SE, we enable mccp3_compress.
+                                        if !self.mccp3_compress {
+                                            self.mccp3_compress = true;
+                                            // If we have any data in the in-buffer, it is definitely compressed.
+                                            if self.in_data.len() > 0 {
+                                                match self.zipper.write_all(self.in_data.as_ref()) {
+                                                    Ok(_) => {
+                                                        let zbuf = self.zipper.get_mut();
+                                                        self.in_data.clear();
+                                                        if self.in_data.remaining() >= zbuf.len() {
+                                                            self.in_data.extend(zbuf.as_ref());
+                                                            zbuf.clear();
+                                                        } else {
+                                                            // ERROR!
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        answer = Ok(Some(TelnetEvent::Compress3(true)));
+                                    }
                                     // This is either unrecognized or app-specific.
                                     _ => answer = Ok(Some(TelnetEvent::SubNegotiate(op, self.sub_data.clone().freeze())))
                                 }
@@ -227,8 +301,8 @@ impl Decoder for TelnetCodec {
                     TelnetState::Data => {
                         if self.line_mode {
                             // We need to grab as much data as possible up to an IAC.
-                            let mut cur = src.as_ref();
-                            if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC) {
+                            let mut cur = self.in_data.as_ref();
+                            if let Some(ipos) = self.in_data.as_ref().iter().position(|b| b == &codes::IAC) {
                                 // there is an IAC.
                                 let (data, _) = cur.split_at(ipos);
                                 cur = data;
@@ -251,13 +325,13 @@ impl Decoder for TelnetCodec {
                             } else {
                                 answer = Err(Self::Error::new(io::ErrorKind::WriteZero, format!("Reached maximum buffer size of: {}", self.app_data.capacity())));
                             }
-                            src.advance(cur.len());
+                            self.in_data.advance(cur.len());
                             if endline {
                                 if let Ok(conv) = String::from_utf8(self.app_data.to_vec()) {
                                     answer = Ok(Some(TelnetEvent::Line(conv)));
                                 }
                                 // Advancing by two more due to the CRLF.
-                                src.advance(2);
+                                self.in_data.advance(2);
                                 self.app_data.clear();
                             }
                             return answer;
@@ -265,11 +339,11 @@ impl Decoder for TelnetCodec {
                             // I really don't wanna be using data mode.. ever. But if someone else does... this must seek up to
                             // an IAC, at which point everything gets copied forward. If there is no IAC, then it just shunts
                             // EVERYTHING forward.
-                            if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC || b == &codes::CR || b == &codes::LF) {
-                                let mut data = src.split_to(ipos);
+                            if let Some(ipos) = self.in_data.as_ref().iter().position(|b| b == &codes::IAC || b == &codes::CR || b == &codes::LF) {
+                                let mut data = self.in_data.split_to(ipos);
                                 return Ok(Some(TelnetEvent::Data(data.freeze())));
                             } else {
-                                let mut data = src.split_to(src.len());
+                                let mut data = self.in_data.split_to(self.in_data.len());
                                 return Ok(Some(TelnetEvent::Data(data.freeze())));
                             }
                             
@@ -279,9 +353,9 @@ impl Decoder for TelnetCodec {
                         // Processing byte in Sub Negotiation mode. In SB mode we are clear to gobble up as many
                         // bytes as we wish, up to an IAC. In fact, until we get an IAC, we can't do anything but
                         // wait for more bytes.
-                        if let Some(ipos) = src.as_ref().iter().position(|b| b == &codes::IAC) {
+                        if let Some(ipos) = self.in_data.as_ref().iter().position(|b| b == &codes::IAC) {
                             // Split off any available up to an IAC and stuff it in the sub data buffer.
-                            let mut data = src.split_to(ipos);
+                            let mut data = self.in_data.split_to(ipos);
                             if data.len() > 0 {
                                 if self.sub_data.remaining_mut() >= data.len() {
                                     self.sub_data.put(data);
@@ -307,66 +381,112 @@ impl Encoder<TelnetEvent> for TelnetCodec {
 
         match item {
             TelnetEvent::Data(data) => {
-                dst.reserve(data.len());
-                dst.put(data);
+                self.out_data.reserve(data.len());
+                self.out_data.put(data);
             },
             TelnetEvent::Line(mut data) => {
                 if !data.ends_with("\r\n") {
                     data.push_str("\r\n");
                 }
-                dst.reserve(data.len());
-                dst.put(data.as_bytes());
+                self.out_data.reserve(data.len());
+                self.out_data.put(data.as_bytes());
             },
             TelnetEvent::Prompt(data) => {
                 // Not sure what to do about prompts yet.
             },
             TelnetEvent::Negotiate(comm, op) => {
-                dst.reserve(3);
-                dst.put_u8(codes::IAC);
-                dst.put_u8(comm);
-                dst.put_u8(op);
+                self.out_data.reserve(3);
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(comm);
+                self.out_data.put_u8(op);
             },
             TelnetEvent::SubNegotiate(op, mut data) => {
-                dst.reserve(5 + data.len());
-                dst.put_u8(codes::IAC);
-                dst.put_u8(codes::SB);
-                dst.put_u8(op);
-                dst.put(data);
-                dst.put_u8(codes::IAC);
-                dst.put_u8(codes::SE);
+                self.out_data.reserve(5 + data.len());
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SB);
+                self.out_data.put_u8(op);
+                self.out_data.put(data);
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SE);
             },
             TelnetEvent::NAWS(width, height) => {
-                dst.reserve(9);
-                dst.put_u8(codes::IAC);
-                dst.put_u8(codes::SB);
-                dst.extend(&width.to_be_bytes());
-                dst.extend(&height.to_be_bytes());
-                dst.put_u8(codes::IAC);
-                dst.put_u8(codes::SE);
+                self.out_data.reserve(9);
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SB);
+                self.out_data.extend(&width.to_be_bytes());
+                self.out_data.extend(&height.to_be_bytes());
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SE);
             },
             TelnetEvent::TTYPE(data) => {
-                dst.reserve(data.len() + 6);
-                dst.put_u8(codes::IAC);
-                dst.put_u8(codes::SB);
-                dst.put_u8(codes::TTYPE);
-                dst.put_u8(0);
-                dst.put(data.as_bytes());
-                dst.put_u8(codes::IAC);
-                dst.put_u8(codes::SE);
+                self.out_data.reserve(data.len() + 6);
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SB);
+                self.out_data.put_u8(codes::TTYPE);
+                self.out_data.put_u8(0);
+                self.out_data.put(data.as_bytes());
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SE);
             },
             TelnetEvent::Command(byte) => {
-                dst.reserve(2);
-                dst.put_u8(codes::IAC);
-                dst.put_u8(byte);
+                self.out_data.reserve(2);
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(byte);
             }
             TelnetEvent::Error(err) => {
 
             },
+            TelnetEvent::GMCP(comm, data) => {
+                self.out_data.reserve(6 + comm.len() + data.len());
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SB);
+                self.out_data.put_u8(codes::GMCP);
+                self.out_data.extend(comm.as_bytes());
+                self.out_data.put_u8(32);
+                self.out_data.extend(data.as_bytes());
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SE);
+            },
+            TelnetEvent::MSSP(vals) => {
+                self.out_data.reserve(5);
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SB);
+                self.out_data.put_u8(codes::MSSP);
+                for (k, v) in vals.iter() {
+                    self.out_data.reserve(k.len() + v.len() + 2);
+                    self.out_data.put_u8(1);
+                    self.out_data.extend(k.as_bytes());
+                    self.out_data.put_u8(2);
+                    self.out_data.extend(v.as_bytes());
+                }
+                self.out_data.put_u8(codes::IAC);
+                self.out_data.put_u8(codes::SE);
+            }
             TelnetEvent::MCCP2(val) => self.mccp2_enabled = val,
             TelnetEvent::MCCP3(val) => self.mccp3_enabled = val,
             TelnetEvent::Compress2(val) => self.mccp2_compress = val,
             TelnetEvent::Compress3(val) => self.mccp3_compress = val,
         }
+
+        if self.mccp2_compress {
+            match self.zipper.write_all(self.out_data.as_ref()) {
+                Ok(()) => {
+                    if let Ok(_) = self.zipper.flush() {
+                        let zbuf = self.zipper.get_mut();
+                        dst.reserve(zbuf.len());
+                        dst.extend(zbuf.as_ref());
+                        zbuf.clear();
+                    } 
+                },
+                Err(e) => {
+
+                }
+            }
+        } else {
+            dst.reserve(self.out_data.len());
+            dst.extend(self.out_data.as_ref());
+        }
+        self.out_data.clear();
         Ok(())
     }
 }

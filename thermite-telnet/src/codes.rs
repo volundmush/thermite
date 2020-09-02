@@ -19,6 +19,9 @@ pub const IAC: u8 = 255;
 
 // The following are special MUD specific protocols.
 
+// MNES: Mud New-Environ standard
+pub const MNES: u8 = 39;
+
 // MUD eXtension Protocol
 // NOTE: Disabled due to too many issues with it.
 pub const MXP: u8 = 91;
