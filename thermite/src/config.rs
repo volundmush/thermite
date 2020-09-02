@@ -31,7 +31,7 @@ pub struct ServerConfig {
 #[derive(Deserialize)]
 pub struct Config {
     pub tls: HashMap<String, Keys>,
-    pub interfaces: HashMap<String, String>,
+    pub interfaces: HashMap<String, IpAddr>,
     pub database: HashMap<String, String>,
     pub listeners: HashMap<String, ServerConfig>
 }

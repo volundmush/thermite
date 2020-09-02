@@ -30,13 +30,13 @@ use tokio_rustls::{
     },
 };
 
-use thermite_lib::conn::{Portal, ProtocolType};
+use thermite_net::{Portal, Msg2Portal};
 use thermite_telnet::{codes as tc};
 
 use thermite::{
     config::{Config, ServerConfig as ThermiteServer},
     db::DbManager,
-    telnet::TelnetOption,
+    telnet::{TelnetOption, TelnetProtocolFactory},
     session::SessionManager
 };
 use std::str::FromStr;
@@ -69,11 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // I'll worry about this later..
     }
 
-    let mut interfaces: HashMap<String, IpAddr> = HashMap::with_capacity(conf.interfaces.len());
-    for (k, v) in conf.interfaces.iter() {
-        let addr = IpAddr::from_str(v).expect("Could not validate IP address!");
-        interfaces.insert(k.clone(), addr);
-    }
+
     // Setup PostGres via Diesel and Tokio-Diesel
     let database_url = conf.database.get("postgres").expect("No database configured for 'postgres'!");
     let db_manager = ConnectionManager::<PgConnection>::new(database_url);
@@ -81,33 +77,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut db = DbManager::new(db_pool);
     let tx_dbmanager = db.tx_dbmanager.clone();
-
     let db_task = tokio::spawn(async move {db.run().await});
 
-    let (tx_sessmanager, rx_sessmanager) = channel(50);
-    let (tx_portal, rx_portal) = channel(50);
-
-    let mut sess_manager = SessionManager::new(tx_sessmanager.clone(), rx_sessmanager, tx_portal.clone());
+    let mut sess_manager = SessionManager::new();
+    let tx_manager = sess_manager.tx_manager.clone();
     let sess_task = tokio::spawn(async move {sess_manager.run().await});
 
-    let mut portal = Portal::new(tx_portal.clone(), rx_portal, tx_sessmanager.clone());
+    let mut portal = Portal::new();
+
+    let mut telnet_factory = TelnetProtocolFactory::new("telnet".parse().unwrap(), teloptions());
+    portal.register_factory(telnet_factory.link());
 
     for (k, v) in conf.listeners.iter() {
 
-        let protocol = match v.protocol.to_lowercase().as_ref() {
-            "telnet" => ProtocolType::Telnet,
-            "websocket" => ProtocolType::WebSocket,
-            _ => panic!("Unsupported Protocol type {}", v.protocol)
-        };
-
         let addr = interfaces.get(&v.interface).expect("Telnet Server attempting to use non-existent interface!");
         let sock = SocketAddr::new(addr.clone(), v.port);
-        let listener = TcpListener::bind(sock).await.expect("Could not bind Telnet Server port... is it in use?");
+        let listener = TcpListener::bind(sock).await.expect("Could not bind server port... is it in use?");
 
         if let Some(tls_key) = &v.tls {
             // Will worry about TLS later...
         } else {
-            portal.listen(String::from(k), listener, None, protocol);
+            portal.listen(String::from(k), listener, None, &v.protocol.clone())?
         }
     }
     let portal_task = tokio::spawn(async move {portal.run().await});

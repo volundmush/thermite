@@ -25,7 +25,7 @@ use futures::{
     stream::{StreamExt}
 };
 
-use thermite_net::{Msg2Factory};
+use thermite_net::{Msg2Factory, FactoryLink, Msg2Portal};
 use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent};
 use std::sync::Arc;
 use crate::session::{Msg2SessionManager, Msg2MudSession, SessionLink};
@@ -571,7 +571,7 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
 }
 
 pub struct TelnetProtocolFactory {
-    tx_portal: Sender<Msg2Portal>,
+    factory_id: String,
     pub tx_factory: Sender<Msg2Factory>,
     rx_factory: Receiver<Msg2Factory>,
     telnet_options: Arc<HashMap<u8, TelnetOption>>,
@@ -580,7 +580,7 @@ pub struct TelnetProtocolFactory {
 }
 
 impl TelnetProtocolFactory {
-    pub fn new(tx_portal: Sender<Msg2Portal>, options: HashMap<u8, TelnetOption>) -> Self {
+    pub fn new(factory_id: String, options: HashMap<u8, TelnetOption>) -> Self {
         let (tx_factory, rx_factory) = channel(50);
 
         // Since this only needs to be done once... we'll clone it from here.
@@ -607,12 +607,19 @@ impl TelnetProtocolFactory {
         }
 
         Self {
-            tx_portal,
+            factory_id,
             tx_factory,
             rx_factory,
             telnet_options: Arc::new(options),
             telnet_statedef: opstates,
             opening_bytes: raw_bytes.freeze()
+        }
+    }
+
+    pub fn link(&self) -> FactoryLink {
+        FactoryLink {
+            factory_id: self.factory_id.clone(),
+            tx_factory: self.tx_factory.clone()
         }
     }
 
