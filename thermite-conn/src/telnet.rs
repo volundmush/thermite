@@ -25,10 +25,10 @@ use futures::{
     stream::{StreamExt}
 };
 
-use thermite_net::{Msg2Factory, FactoryLink, Msg2Portal};
+use thermite_net::{Msg2Factory, FactoryLink};
 use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent};
 use std::sync::Arc;
-use crate::session::{Msg2SessionManager, Msg2MudSession, SessionLink};
+use crate::{Msg2ConnectionManager, Msg2MudConnection, ConnectionLink};
 
 #[derive(Default, Clone)]
 pub struct TelnetOptionPerspective {
@@ -117,10 +117,9 @@ impl Default for TelnetConfig {
 impl TelnetConfig {
     pub fn capabilities(&self) -> ClientCapabilities {
         ClientCapabilities {
-            text: true,
-            utf8: self.utf8,
+            utf8: self.utf8.clone(),
             html: false,
-            mxp: self.mxp,
+            mxp: self.mxp.clone(),
             data: self.gmcp || self.msdp,
             ansi: self.ansi,
             xterm256: self.xterm256,
@@ -141,18 +140,18 @@ pub struct TelnetSession<T> {
     tls: bool,
     handshakes_left: HashSet<u8>,
     conn: Framed<T, TelnetCodec>,
-    pub tx_session: Sender<Msg2MudSession>,
-    rx_session: Receiver<Msg2MudSession>,
-    tx_manager: Sender<Msg2SessionManager>
+    pub tx_connection: Sender<Msg2MudConnection>,
+    rx_connection: Receiver<Msg2MudConnection>,
+    tx_manager: Sender<Msg2ConnectionManager>
 }
 
 
 impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync {
     pub fn new(conn_id: String, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool,
-               tx_manager: Sender<Msg2SessionManager>, telnet_options: Arc<HashMap<u8, TelnetOption>>,
+               tx_manager: Sender<Msg2ConnectionManager>, telnet_options: Arc<HashMap<u8, TelnetOption>>,
                op_state: HashMap<u8, TelnetOptionState>) -> Self {
 
-        let (tx_session, rx_session) = channel(50);
+        let (tx_connection, rx_connection) = channel(50);
 
         let mut handshakes_left: HashSet<u8> = Default::default();
         for (k, v) in op_state.iter() {
@@ -166,8 +165,8 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
             op_state,
             conn,
             handshakes_left,
-            tx_session,
-            rx_session,
+            tx_connection,
+            rx_connection,
             tx_manager,
             tls
         }
@@ -191,7 +190,7 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
         // Ready a message to fire off quickly for in case
         let mut ready_task = tokio::spawn(async move {
             time::delay_for(Duration::from_millis(500)).await;
-            send_chan.send(Msg2MudSession::ProtocolReady).await;
+            send_chan.send(Msg2MudConnection::ProtocolReady).await;
             ()
         });
 
@@ -213,25 +212,25 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
                         }
                     }
                 },
-                p_msg = self.rx_session.recv() => {
+                p_msg = self.rx_connection.recv() => {
                     if let Some(msg) = p_msg {
                         match msg {
-                            Msg2MudSession::Disconnect => {
+                            Msg2MudConnection::Disconnect => {
                                 break;
                             },
-                            Msg2MudSession::Line(text) => {
+                            Msg2MudConnection::Line(text) => {
 
                             },
-                            Msg2MudSession::Prompt(text) => {
+                            Msg2MudConnection::Prompt(text) => {
 
                             },
-                            Msg2MudSession::Data => {
+                            Msg2MudConnection::Data => {
 
                             },
-                            Msg2MudSession::MSSP => {
+                            Msg2MudConnection::MSSP => {
 
                             },
-                            Msg2MudSession::Ready => {
+                            Msg2MudConnection::Ready => {
 
                             }
                         }
@@ -379,7 +378,7 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
             // text on.
             let maybe_chan = self.tx_session.clone();
             if let Some(mut chan) = maybe_chan {
-                chan.send(Msg2Session::ClientCommand(text)).await;
+                chan.send(Msg2Connection::ClientCommand(text)).await;
             }
         }
     }

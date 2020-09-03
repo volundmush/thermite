@@ -8,27 +8,6 @@ use std::{
     net::SocketAddr,
 };
 
-pub enum Msg2MudSession {
-    Disconnect,
-    Line(String),
-    Prompt(String),
-    Data,
-    MSSP,
-    Ready
-}
-
-pub struct SessionLink {
-    pub conn_id: String,
-    pub addr: SocketAddr,
-    pub tls: bool,
-    pub tx_session: Sender<Msg2MudSession>
-}
-
-pub enum Msg2SessionManager {
-    NewSession(SessionLink),
-    SessionCommand(String, String),
-    SessionDisconnected(String),
-}
 
 pub struct SessionManager {
     sessions: HashMap<String, SessionLink>,
