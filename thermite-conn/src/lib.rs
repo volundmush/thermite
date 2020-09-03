@@ -1,10 +1,11 @@
+use serde_json::Value as JsonValue;
+use tokio::sync::mpsc::{Sender, Receiver};
+use std::net::SocketAddr;
+
 pub mod telnet;
 pub mod websocket;
 
-use serde_json::Value as JsonValue;
-use tokio::sync::mpsc::{Sender, Receiver};
-
-pub enum Msg2MudConnection {
+pub enum Msg2MudProtocol {
     Disconnect,
     Line(String),
     Prompt(String),
@@ -15,16 +16,31 @@ pub enum Msg2MudConnection {
 }
 
 pub enum Msg2ConnectionManager {
-    NewConnection(ConnectionLink),
+    NewConnection(ProtocolLink),
     ConnectionCommand(String, String),
     ConnectionDisconnected(String),
 }
 
+pub struct ProtocolCapabilities {
+    pub client_name: String,
+    pub client_version: String,
+    pub utf8: bool,
+    pub html: bool,
+    pub mxp: bool,
+    pub gmcp: bool,
+    pub msdp: bool,
+    pub ansi: bool,
+    pub xterm256: bool,
+    pub width: u16,
+    pub height: u16,
+    pub screen_reader: bool,
+}
+
 // This is received by whatever handles connections once they are ready to join the game.
-// #TODO: Stick client capabilities in here.
-pub struct ConnectionLink {
+pub struct ProtocolLink {
     pub conn_id: String,
     pub addr: SocketAddr,
     pub tls: bool,
-    pub tx_session: Sender<Msg2MudSession>
+    pub capabilities: ProtocolCapabilities,
+    pub tx_session: Sender<Msg2MudProtocol>
 }

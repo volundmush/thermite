@@ -1396,6 +1396,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "thermite-ansi",
+ "thermite-conn",
  "thermite-net",
  "thermite-telnet",
  "tokio",
@@ -1413,6 +1414,21 @@ version = "0.1.0"
 dependencies = [
  "textwrap 0.12.1",
  "vtparse",
+]
+
+[[package]]
+name = "thermite-conn"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thermite-net",
+ "thermite-telnet",
+ "tokio",
+ "tokio-tungstenite",
+ "tungstenite",
 ]
 
 [[package]]
@@ -1434,6 +1450,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "tokio",
  "tokio-util",
 ]
 

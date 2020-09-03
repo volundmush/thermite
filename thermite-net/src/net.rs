@@ -4,7 +4,6 @@ use std::{
 };
 
 use tokio::{
-    prelude::*,
     sync::mpsc::{channel, Receiver, Sender},
     net::{TcpListener, TcpStream},
     task::JoinHandle
@@ -15,10 +14,6 @@ use tokio_rustls::{
     server::TlsStream
 };
 
-
-use std::collections::HashSet;
-
-
 pub enum Msg2Listener {
     Kill
 }
@@ -27,7 +22,6 @@ pub enum Msg2Listener {
 pub struct Listener {
     listen_id: String,
     listener: TcpListener,
-    addr: SocketAddr,
     factory: String,
     tls_acceptor: Option<TlsAcceptor>,
     rx_listener: Receiver<Msg2Listener>,
@@ -36,7 +30,7 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn new(listener: TcpListener, addr: SocketAddr, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_portal: Sender<Msg2Portal>, factory: &String) -> Self {
+    pub fn new(listener: TcpListener, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_portal: Sender<Msg2Portal>, factory: &String) -> Self {
         let (tx_listener, rx_listener) = channel(50);
         Self {
             listen_id,
@@ -44,7 +38,6 @@ impl Listener {
             factory: factory.clone(),
             tls_acceptor,
             listener,
-            addr,
             tx_listener,
             rx_listener,
         }
@@ -72,14 +65,14 @@ impl Listener {
                                     let c_acc = acc.clone();
                                     if let Ok(tls_stream) = c_acc.accept(tcp_stream).await {
 
-                                        self.tx_portal.send(Msg2Portal::AcceptTLS(tls_stream, addr, self.factory.clone())).await;
+                                        let _ = self.tx_portal.send(Msg2Portal::AcceptTLS(tls_stream, addr, self.factory.clone())).await;
                                     } else {
                                         // Not sure what to do if TLS fails...
                                     }
                                 },
                                 Option::None => {
                                     // TLS is not engaged.
-                                    self.tx_portal.send(Msg2Portal::AcceptTCP(tcp_stream, addr, self.factory.clone())).await;
+                                    let _ = self.tx_portal.send(Msg2Portal::AcceptTCP(tcp_stream, addr, self.factory.clone())).await;
                                 }
                             }
                         },
@@ -107,7 +100,6 @@ pub struct FactoryLink {
 pub struct ListenerLink {
     pub listen_id: String,
     pub factory: String,
-    pub addr: SocketAddr,
     pub tls: bool,
     pub handle: JoinHandle<()>,
     pub tx_listener: Sender<Msg2Listener>,
@@ -138,8 +130,7 @@ pub struct Portal {
     listeners: HashMap<String, ListenerLink>,
     factories: HashMap<String, FactoryLink>,
     pub tx_portal: Sender<Msg2Portal>,
-    rx_portal: Receiver<Msg2Portal>,
-    tx_sessmanager: Sender<Msg2SessionManager>
+    rx_portal: Receiver<Msg2Portal>
 }
 
 impl Portal {
@@ -152,8 +143,7 @@ impl Portal {
             listeners: Default::default(),
             factories: Default::default(),
             tx_portal,
-            rx_portal,
-            tx_sessmanager
+            rx_portal
         }
     }
 
@@ -164,21 +154,21 @@ impl Portal {
                     Msg2Portal::Kill => {
                         // This should full stop all listeners and clients and tasks then end this tasks.
                         for (_k, v) in self.listeners.iter_mut() {
-                            v.tx_listener.send(Msg2Listener::Kill).await;
+                            let _ = v.tx_listener.send(Msg2Listener::Kill).await;
                         }
                         for (_k, v) in self.factories.iter_mut() {
-                            v.tx_factory.send(Msg2Factory::Kill).await;
+                            let _ = v.tx_factory.send(Msg2Factory::Kill).await;
                         }
                         break;
                     },
                     Msg2Portal::AcceptTCP(stream, addr, factory) => {
                         if let Some(factory) = self.factories.get_mut(&factory) {
-                            factory.tx_factory.send(Msg2Factory::AcceptTCP(stream, addr)).await;
+                            let _ = factory.tx_factory.send(Msg2Factory::AcceptTCP(stream, addr)).await;
                         }
                     },
                     Msg2Portal::AcceptTLS(stream, addr, factory) => {
                         if let Some(factory) = self.factories.get_mut(&factory) {
-                            factory.tx_factory.send(Msg2Factory::AcceptTLS(stream, addr)).await;
+                            let _ = factory.tx_factory.send(Msg2Factory::AcceptTLS(stream, addr)).await;
                         }
                     },
                 }
@@ -197,17 +187,15 @@ impl Portal {
         if !self.factories.contains_key(protocol) {
             return;
         }
-        let addr = listener.local_addr().unwrap();
 
         let tls_bool = tls.is_some();
 
-        let mut listener = Listener::new(listener, addr.clone(), tls.clone(), listen_id.clone(), self.tx_portal.clone(), protocol);
+        let mut listener = Listener::new(listener, tls.clone(), listen_id.clone(), self.tx_portal.clone(), protocol);
         let tx_listener = listener.tx_listener.clone();
 
         let handle = tokio::spawn(async move {listener.run().await});
 
-        let mut listen_link = ListenerLink {
-            addr,
+        let listen_link = ListenerLink {
             listen_id: listen_id.clone(),
             factory: protocol.clone(),
             handle,

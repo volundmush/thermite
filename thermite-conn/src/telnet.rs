@@ -1,3 +1,13 @@
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+    vec::Vec,
+    net::SocketAddr,
+    convert::TryInto,
+    time::Duration,
+    sync::Arc
+};
+
 use tokio::{
     prelude::*,
     sync::mpsc::{Receiver, Sender, channel},
@@ -6,17 +16,6 @@ use tokio::{
 };
 
 use tokio_util::codec::{Framed};
-
-
-use std::{
-    collections::{HashMap, HashSet},
-    io,
-    vec::Vec,
-    net::SocketAddr,
-    convert::TryInto,
-    time::Duration
-};
-
 
 use bytes::{BytesMut, Bytes, BufMut, Buf};
 
@@ -27,8 +26,9 @@ use futures::{
 
 use thermite_net::{Msg2Factory, FactoryLink};
 use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent};
-use std::sync::Arc;
-use crate::{Msg2ConnectionManager, Msg2MudConnection, ConnectionLink};
+
+use crate::{Msg2ConnectionManager, Msg2MudConnection, ConnectionLink,
+            ConnectionCapabilities};
 
 #[derive(Default, Clone)]
 pub struct TelnetOptionPerspective {
@@ -115,22 +115,25 @@ impl Default for TelnetConfig {
 }
 
 impl TelnetConfig {
-    pub fn capabilities(&self) -> ClientCapabilities {
-        ClientCapabilities {
+    pub fn capabilities(&self) -> ConnectionCapabilities {
+        ConnectionCapabilities {
+            client_name: self.client_name.clone(),
+            client_version: self.client_version.clone(),
             utf8: self.utf8.clone(),
             html: false,
             mxp: self.mxp.clone(),
-            data: self.gmcp || self.msdp,
-            ansi: self.ansi,
-            xterm256: self.xterm256,
-            width: self.width,
-            height: self.height,
-            screen_reader: self.screen_reader
+            msdp: self.msdp.clone(),
+            gmcp: self.gmcp.clone(),
+            ansi: self.ansi.clone(),
+            xterm256: self.xterm256.clone(),
+            width: self.width.clone(),
+            height: self.height.clone(),
+            screen_reader: self.screen_reader.clone()
         }
     }
 }
 
-pub struct TelnetSession<T> {
+pub struct TelnetProtocol<T> {
     // This serves as a higher-level actor that abstracts a bunch of the lower-level
     // nitty-gritty so the Session doesn't need to deal with it.
     op_state: HashMap<u8, TelnetOptionState>,
@@ -138,6 +141,7 @@ pub struct TelnetSession<T> {
     conn_id: String,
     addr: SocketAddr,
     tls: bool,
+    config: TelnetConfig,
     handshakes_left: HashSet<u8>,
     conn: Framed<T, TelnetCodec>,
     pub tx_connection: Sender<Msg2MudConnection>,
@@ -146,7 +150,7 @@ pub struct TelnetSession<T> {
 }
 
 
-impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync {
+impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync {
     pub fn new(conn_id: String, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool,
                tx_manager: Sender<Msg2ConnectionManager>, telnet_options: Arc<HashMap<u8, TelnetOption>>,
                op_state: HashMap<u8, TelnetOptionState>) -> Self {
@@ -164,6 +168,7 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
             telnet_options,
             op_state,
             conn,
+            config: TelnetConfig::default(),
             handshakes_left,
             tx_connection,
             rx_connection,
@@ -176,7 +181,8 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
         ConnectionLink {
             conn_id: self.conn_id.clone(),
             addr: self.addr.clone(),
-            tls: self.tls,
+            tls: self.tls.clone(),
+            capabilities: self.config.capabilities(),
             tx_session: self.tx_session.clone()
         }
     }
@@ -184,13 +190,13 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
     pub async fn run(&mut self, opening: Bytes) {
         
         // Just packing all of this together so it gets sent at once.
-        self.conn.send(TelnetEvent::Data(raw_bytes)).await;
+        let _ = self.conn.send(TelnetEvent::Data(raw_bytes)).await;
         let mut send_chan = self.tx_protocol.clone();
 
         // Ready a message to fire off quickly for in case
         let mut ready_task = tokio::spawn(async move {
             time::delay_for(Duration::from_millis(500)).await;
-            send_chan.send(Msg2MudConnection::ProtocolReady).await;
+            let _ = send_chan.send(Msg2MudConnection::ProtocolReady).await;
             ()
         });
 
@@ -378,7 +384,7 @@ impl<T> TelnetSession<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpi
             // text on.
             let maybe_chan = self.tx_session.clone();
             if let Some(mut chan) = maybe_chan {
-                chan.send(Msg2Connection::ClientCommand(text)).await;
+                let _ = chan.send(Msg2Connection::ClientCommand(text)).await;
             }
         }
     }
@@ -590,13 +596,13 @@ impl TelnetProtocolFactory {
         for (b, handler) in options.iter() {
             let mut state = TelnetOptionState::default();
 
-            if handler.start_will {
+            if handler.start_local {
                 state.local.negotiating = true;
                 raw_bytes.put_u8(tc::IAC);
                 raw_bytes.put_u8(tc::WILL);
                 raw_bytes.put_u8(b.clone());
             }
-            if handler.start_do {
+            if handler.start_remote {
                 state.remote.negotiating = true;
                 raw_bytes.put_u8(tc::IAC);
                 raw_bytes.put_u8(tc::DO);
@@ -626,11 +632,11 @@ impl TelnetProtocolFactory {
         loop {
             if let Some(f_msg) = self.rx_factory.recv().await {
                 match f_msg {
-                    Msg2Factory::AcceptTLS(conn_id, stream, addr) => {
-                        self.accept(conn_id, stream, addr, true);
+                    Msg2Factory::AcceptTLS(stream, addr) => {
+                        self.accept(stream, addr, true);
                     },
-                    Msg2Factory::AcceptTCP(conn_id, stream, addr) => {
-                        self.accept(conn_id, stream, addr, false);
+                    Msg2Factory::AcceptTCP(stream, addr) => {
+                        self.accept(stream, addr, false);
                     },
                     Msg2Factory::Kill => {
                         break;
@@ -640,7 +646,7 @@ impl TelnetProtocolFactory {
         }
     }
 
-    fn accept<C>(&mut self, conn_id: String, conn: C, addr: SocketAddr, tls: bool) 
+    fn accept<C>(&mut self, conn: C, addr: SocketAddr, tls: bool)
         where C: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync
     {
         let telnet_codec = Framed::new(conn, TelnetCodec::new(true));
@@ -649,7 +655,9 @@ impl TelnetProtocolFactory {
         let (tx_mudtel, rx_mudtel) = channel(50);
         let (tx_mudconn, rx_mudconn) = channel(50);
 
-        let tel_prot = MudTelnetProtocol::new(conn_id.clone(), telnet_codec, tx_mudtel, rx_mudtel, tx_mudconn, self.telnet_options.clone(), self.telnet_statedef.clone());
+        let conn_id = self.generate_id();
+
+        let tel_prot = MudTelnetProtocol::new(conn_id, telnet_codec, tx_mudtel, rx_mudtel, tx_mudconn, self.telnet_options.clone(), self.telnet_statedef.clone());
 
 
     }

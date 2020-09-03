@@ -21,6 +21,7 @@ serde_json = "1.0"
 thermite-ansi = {version = "0.1", path = "../thermite-ansi"}
 thermite-telnet = {version = "0.1", path = "../thermite-telnet"}
 thermite-net = {version = "0.1", path = "../thermite-net"}
+thermite-conn = {version = "0.1", path = "../thermite-conn"}
 dotenv = "0.15"
 toml = "0.5"
 chrono = "0.4"
