@@ -12,7 +12,7 @@ use flate2::{
     Compression,
 };
 
-use serde_json::{JsonResult, Value as JsonValue};
+use serde_json::{Result as JsonResult, Value as JsonValue};
 
 // This may be useful for certain kinds of applications.
 pub enum TelnetConnectionType {
@@ -164,7 +164,7 @@ impl TelnetCodec {
         }
     }
     
-    fn enable_incoming_compression(&mut self) -> Result<(), Self::Error> {
+    fn enable_incoming_compression(&mut self) -> Result<(), io::Error> {
         // Enables incoming zlib compression. If there is anything in the in-buffer, it will be
         // compressed.
         if !self.in_compress {
@@ -178,7 +178,7 @@ impl TelnetCodec {
                         let zbuf = self.unzipper.get_mut();
                         self.in_data.clear();
                         if self.in_data.remaining() >= zbuf.len() {
-                            self.in_data.extend(zbuf.as_ref());
+                            self.in_data.put(zbuf.as_ref());
                             zbuf.clear();
                         } else {
                             // ERROR! Not enough buffer space!
@@ -208,7 +208,7 @@ impl Decoder for TelnetCodec {
                         self.unzipper.flush();
                         let zbuf = self.unzipper.get_mut();
                         if self.in_data.remaining() >= zbuf.len() {
-                            self.in_data.extend(zbuf.as_ref());
+                            self.in_data.put(zbuf.as_ref());
                             zbuf.clear();
                         } else {
                             return Err(Self::Error::new(io::ErrorKind::InvalidData,
@@ -500,11 +500,9 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 self.out_data.reserve(2);
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(byte);
-            }
-            TelnetEvent::Error(err) => {
-
             },
             TelnetEvent::GMCP(comm, data) => {
+
                 self.out_data.reserve(6 + comm.len() + data.len());
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(codes::SB);
@@ -563,10 +561,11 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                         dst.reserve(zbuf.len());
                         dst.extend(zbuf.as_ref());
                         zbuf.clear();
-                    } 
+                    }
                 },
                 Err(e) => {
-
+                    return Err(Self::Error::new(io::ErrorKind::InvalidData,
+                                                format!("Zlib Decompression Error: {}", e)));
                 }
             }
         } else {
