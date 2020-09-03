@@ -2,7 +2,7 @@ use tokio_util::codec::{Encoder, Decoder};
 use bytes::{BytesMut, Buf, BufMut, Bytes};
 use std::{
     io,
-    io::{Read, Write},
+    io::{Write},
     collections::HashMap,
 };
 use crate::codes;
@@ -108,14 +108,11 @@ pub struct TelnetCodec {
     zipper: ZlibEncoder<Vec<u8>>,
     unzipper: ZlibDecoder<Vec<u8>>,
     out_compress: bool,
-    in_compress: bool,
-    mnes_buffer: HashMap<String, String>
+    in_compress: bool
 }
 
 impl TelnetCodec {
     pub fn new(conn_type: TelnetConnectionType, conn_mode: TelnetConnectionMode, max_buffer: usize) -> Self {
-        let mut capacity = 0;
-        // Setting an override capacity. in line mode, app_data is never used so we don't need to allocate memory.
 
         TelnetCodec {
             conn_type,
@@ -129,14 +126,14 @@ impl TelnetCodec {
             unzipper: ZlibDecoder::new(Vec::new()),
             max_buffer,
             in_compress: false,
-            out_compress: false,
-            mnes_buffer: Default::default()
+            out_compress: false
         }
     }
 }
 
 impl TelnetCodec {
-    fn try_parse_iac(&mut self, bytes: &[u8]) -> (IacSection, usize) {
+    fn try_parse_iac(&mut self) -> (IacSection, usize) {
+        let bytes = self.in_data.as_ref();
         if bytes.len() < 2 {
             return (IacSection::Pending, 0);
         };
@@ -170,27 +167,38 @@ impl TelnetCodec {
         if !self.in_compress {
             self.in_compress = true;
             // Resets the zipper if this is a restarted compression stream.
-            self.unzipper.reset(Vec::new());
+            self.unzipper.reset(Vec::new())?;
             // If we have any data in the in-buffer, it is definitely compressed.
             if self.in_data.len() > 0 {
-                match self.unzipper.write_all(self.in_data.as_ref()) {
-                    Ok(_) => {
-                        let zbuf = self.unzipper.get_mut();
-                        self.in_data.clear();
-                        if self.in_data.remaining() >= zbuf.len() {
-                            self.in_data.put(zbuf.as_ref());
-                            zbuf.clear();
-                        } else {
-                            // ERROR! Not enough buffer space!
-                        }
-                    }
-                    Err(_) => {
-                        // We should probably return some kind of error here...
-                    }
-                }
+                let mut to_decomp = self.in_data.clone();
+                self.in_data.clear();
+                self.decompress_into(&mut to_decomp)?
             }
         }
         Ok(())
+    }
+
+    fn decompress_into(&mut self, src: &BytesMut) -> Result<(), io::Error> {
+        match self.unzipper.write_all(src.as_ref()) {
+            Ok(()) => {
+                if let Err(e) = self.unzipper.flush() {
+                    return Err(e);
+                }
+                let zbuf = self.unzipper.get_mut();
+                if self.in_data.remaining() >= zbuf.len() {
+                    self.in_data.put(zbuf.as_ref());
+                    zbuf.clear();
+                    Ok(())
+                } else {
+                    Err(io::Error::new(io::ErrorKind::InvalidData,
+                                                format!("Reached maximum buffer size of: {}", self.in_data.capacity())))
+                }
+            },
+            Err(e) => {
+                Err(io::Error::new(io::ErrorKind::InvalidData,
+                                            format!("Zlib Decompression Error: {}", e)))
+            }
+        }
     }
 }
 
@@ -203,26 +211,13 @@ impl Decoder for TelnetCodec {
         // src has the bytes from the stream. but we want to optionally decompress it into in_data
         if src.len() > 0 {
             if self.out_compress {
-                match self.unzipper.write_all(src.as_ref()) {
-                    Ok(()) => {
-                        self.unzipper.flush();
-                        let zbuf = self.unzipper.get_mut();
-                        if self.in_data.remaining() >= zbuf.len() {
-                            self.in_data.put(zbuf.as_ref());
-                            zbuf.clear();
-                        } else {
-                            return Err(Self::Error::new(io::ErrorKind::InvalidData,
-                                                        format!("Reached maximum buffer size of: {}", self.max_buffer)));
-                        }
-                    },
-                    Err(e) => {
-                        return Err(Self::Error::new(io::ErrorKind::InvalidData,
-                                                    format!("Zlib Decompression Error: {}", e)));
-                    }
+                match self.decompress_into(src) {
+                    Ok(_) => {},
+                    Err(e) => return Err(e),
                 }
             } else {
                 if self.in_data.remaining() >= src.len() {
-                    self.in_data.extend(src.as_ref());
+                    self.in_data.put(src.as_ref());
                 } else {
                     return Err(Self::Error::new(io::ErrorKind::InvalidData,
                                                 format!("Reached maximum buffer size of: {}", self.max_buffer)));
@@ -245,7 +240,7 @@ impl Decoder for TelnetCodec {
             }
 
             if self.in_data[0] == codes::IAC {
-                let (res, consume) = self.try_parse_iac(self.in_data.bytes());
+                let (res, consume) = self.try_parse_iac();
                 self.in_data.advance(consume);
 
                 match res {
@@ -392,7 +387,8 @@ impl Decoder for TelnetCodec {
                                 } else {
                                     answer = Err(Self::Error::new(io::ErrorKind::InvalidData, format!("Reached maximum buffer size of: {}", self.max_buffer)));
                                 }
-                                self.in_data.advance(cur.len());
+                                let to_advance = cur.len();
+                                self.in_data.advance(to_advance);
                                 if endline {
                                     if let Ok(conv) = String::from_utf8(self.app_data.to_vec()) {
                                         answer = Ok(Some(TelnetEvent::Line(conv)));
@@ -408,10 +404,10 @@ impl Decoder for TelnetCodec {
                                 // an IAC, at which point everything gets copied forward. If there is no IAC, then it just shunts
                                 // EVERYTHING forward.
                                 if let Some(ipos) = self.in_data.as_ref().iter().position(|b| b == &codes::IAC || b == &codes::CR || b == &codes::LF) {
-                                    let mut data = self.in_data.split_to(ipos);
+                                    let data = self.in_data.split_to(ipos);
                                     return Ok(Some(TelnetEvent::Data(data.freeze())));
                                 } else {
-                                    let mut data = self.in_data.split_to(self.in_data.len());
+                                    let data = self.in_data.split_to(self.in_data.len());
                                     return Ok(Some(TelnetEvent::Data(data.freeze())));
                                 }
                             }
@@ -423,7 +419,7 @@ impl Decoder for TelnetCodec {
                         // wait for more bytes.
                         if let Some(ipos) = self.in_data.as_ref().iter().position(|b| b == &codes::IAC) {
                             // Split off any available up to an IAC and stuff it in the sub data buffer.
-                            let mut data = self.in_data.split_to(ipos);
+                            let data = self.in_data.split_to(ipos);
                             if data.len() > 0 {
                                 if self.sub_data.remaining_mut() >= data.len() {
                                     self.sub_data.put(data);
@@ -468,7 +464,7 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 self.out_data.put_u8(comm);
                 self.out_data.put_u8(op);
             },
-            TelnetEvent::SubNegotiate(op, mut data) => {
+            TelnetEvent::SubNegotiate(op, data) => {
                 self.out_data.reserve(5 + data.len());
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(codes::SB);
@@ -481,8 +477,8 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 self.out_data.reserve(9);
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(codes::SB);
-                self.out_data.extend(&width.to_be_bytes());
-                self.out_data.extend(&height.to_be_bytes());
+                self.out_data.put(width.to_be_bytes().as_ref());
+                self.out_data.put(height.to_be_bytes().as_ref());
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(codes::SE);
             },
@@ -502,14 +498,14 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 self.out_data.put_u8(byte);
             },
             TelnetEvent::GMCP(comm, data) => {
-
-                self.out_data.reserve(6 + comm.len() + data.len());
+                let outjson = data.to_string();
+                self.out_data.reserve(6 + comm.len() + outjson.len());
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(codes::SB);
                 self.out_data.put_u8(codes::GMCP);
-                self.out_data.extend(comm.as_bytes());
+                self.out_data.put(comm.as_bytes());
                 self.out_data.put_u8(32);
-                self.out_data.extend(data.as_bytes());
+                self.out_data.put(outjson.as_bytes());
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(codes::SE);
             },
@@ -521,9 +517,9 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 for (k, v) in vals.iter() {
                     self.out_data.reserve(k.len() + v.len() + 2);
                     self.out_data.put_u8(1);
-                    self.out_data.extend(k.as_bytes());
+                    self.out_data.put(k.as_bytes());
                     self.out_data.put_u8(2);
-                    self.out_data.extend(v.as_bytes());
+                    self.out_data.put(v.as_bytes());
                 }
                 self.out_data.put_u8(codes::IAC);
                 self.out_data.put_u8(codes::SE);
@@ -532,7 +528,9 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 if op {
                     // We are enabling outgoing compression. set toggles and compress any buffered
                     // bytes in self.in_data
-                    self.enable_incoming_compression();
+                    if let Err(e) = self.enable_incoming_compression() {
+                        return Err(e);
+                    }
                 } else {
                     if self.in_compress {
                         self.in_compress = false;
@@ -543,7 +541,9 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 if op {
                     if !self.out_compress {
                         self.out_compress = true;
-                        self.zipper.reset(Vec::new());
+                        if let Err(e) = self.zipper.reset(Vec::new()) {
+                            return Err(e);
+                        }
                     }
                 } else {
                     if self.out_compress {
@@ -559,7 +559,7 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                     if let Ok(_) = self.zipper.flush() {
                         let zbuf = self.zipper.get_mut();
                         dst.reserve(zbuf.len());
-                        dst.extend(zbuf.as_ref());
+                        dst.put(zbuf.as_ref());
                         zbuf.clear();
                     }
                 },
@@ -570,7 +570,7 @@ impl Encoder<TelnetEvent> for TelnetCodec {
             }
         } else {
             dst.reserve(self.out_data.len());
-            dst.extend(self.out_data.as_ref());
+            dst.put(self.out_data.as_ref());
         }
         self.out_data.clear();
         Ok(())
