@@ -35,14 +35,20 @@ impl ProtocolManager {
     pub async fn run(&mut self) {
         loop {
             if let Some(msg) = self.rx_manager.recv().await {
+                println!("Protocol Manager got a message: {:?}", msg);
                 match msg {
                     Msg2ProtocolManager::NewProtocol(mut link) => {
                         let welcome = self.welcome_screen(&link);
-                        let _ = link.tx_protocol.send(Msg2MudProtocol::Line(welcome));
+                        let mut tx = link.tx_protocol.clone();
                         self.protocols.insert(link.conn_id.clone(), link);
+                        let _ = tx.send(Msg2MudProtocol::Ready).await;
+                        let _ = tx.send(Msg2MudProtocol::Line(welcome)).await;
                     },
                     Msg2ProtocolManager::ProtocolCommand(conn_id, command) => {
                         println!("GOT COMMAND FROM {}: {}", conn_id, command);
+                        if let Some(link) = self.protocols.get_mut(&conn_id) {
+                            let _ = link.tx_protocol.send(Msg2MudProtocol::Line(format!("ECHO: {}", command))).await;
+                        }
                     },
                     Msg2ProtocolManager::ProtocolDisconnected(conn_id) => {
                         println!("SESSION {} DISCONNECTED!", conn_id);

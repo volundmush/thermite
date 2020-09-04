@@ -256,18 +256,24 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                             },
                             Err(e) => {
                                 println!("GOT ERROR: {:?}", e);
+                                if self.active {
+                                    let _ = self.tx_manager.send(Msg2ProtocolManager::ProtocolDisconnected(self.conn_id.clone())).await;
+                                }
+                                let _ = self.conn.close().await;
+                                break;
                             }
                         }
                     }
                 },
                 p_msg = self.rx_protocol.recv() => {
                     if let Some(msg) = p_msg {
+                        println!("Got Protocol Message: {:?}", msg);
                         match msg {
                             Msg2MudProtocol::Disconnect => {
                                 break;
                             },
                             Msg2MudProtocol::Line(text) => {
-
+                                let _ = self.conn.send(TelnetEvent::Line(text)).await;
                             },
                             Msg2MudProtocol::Prompt(text) => {
 
@@ -462,6 +468,8 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         println!("RECEIVED LINE: {}", text);
         if self.active {
             let _ = self.tx_manager.send(Msg2ProtocolManager::ProtocolCommand(self.conn_id.clone(), text)).await;
+        } else {
+            println!("But we're not active.");
         }
     }
 

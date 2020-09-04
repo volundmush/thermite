@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 pub mod telnet;
 pub mod websocket;
 
+#[derive(Debug)]
 pub enum Msg2MudProtocol {
     Disconnect,
     Line(String),
@@ -16,12 +17,14 @@ pub enum Msg2MudProtocol {
     Ready
 }
 
+#[derive(Debug)]
 pub enum Msg2ProtocolManager {
     NewProtocol(ProtocolLink),
     ProtocolCommand(String, String),
     ProtocolDisconnected(String),
 }
 
+#[derive(Debug)]
 pub struct ProtocolCapabilities {
     pub client_name: String,
     pub client_version: String,
@@ -38,6 +41,7 @@ pub struct ProtocolCapabilities {
 }
 
 // This is received by whatever handles connections once they are ready to join the game.
+#[derive(Debug)]
 pub struct ProtocolLink {
     pub conn_id: String,
     pub addr: SocketAddr,

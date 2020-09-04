@@ -185,7 +185,7 @@ impl TelnetCodec {
                     return Err(e);
                 }
                 let zbuf = self.unzipper.get_mut();
-                if self.in_data.remaining() >= zbuf.len() {
+                if self.in_data.remaining_mut() >= zbuf.len() {
                     self.in_data.put(zbuf.as_ref());
                     zbuf.clear();
                     Ok(())
@@ -207,18 +207,19 @@ impl Decoder for TelnetCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-
         // src has the bytes from the stream. but we want to optionally decompress it into in_data
         if src.len() > 0 {
-            if self.out_compress {
+            println!("GOT {} bytes!", src.len());
+            if self.in_compress {
                 match self.decompress_into(src) {
                     Ok(_) => {},
                     Err(e) => return Err(e),
                 }
             } else {
-                if self.in_data.remaining() >= src.len() {
+                if self.in_data.remaining_mut() >= src.len() {
                     self.in_data.put(src.as_ref());
                 } else {
+                    println!("remaining of in_data is: {}", self.in_data.remaining_mut());
                     return Err(Self::Error::new(io::ErrorKind::InvalidData,
                                                 format!("Reached maximum buffer size of: {}", self.max_buffer)));
                 }
@@ -442,7 +443,7 @@ impl Encoder<TelnetEvent> for TelnetCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: TelnetEvent, dst: &mut BytesMut) -> Result<(), Self::Error> {
-
+        println!("Sending TelnetEvent: {:?}", item);
         match item {
             TelnetEvent::Data(data) => {
                 self.out_data.reserve(data.len());
