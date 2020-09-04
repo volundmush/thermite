@@ -6,6 +6,15 @@ use std::{
 
 use regex::Regex;
 
+use vtparse::{
+    VTActor, VTParser
+};
+
+use hyphenation::{Language, Load, Standard};
+use textwrap::Wrapper;
+
+use thermite_util::text::{repeat_string};
+
 //use unicode_segmentation::UnicodeSegmentation;
 
 pub fn strip_ansi(src: &str) -> String {
@@ -29,6 +38,22 @@ impl AnsiToken {
             Self::Spaces(val) => val.clone(),
             Self::Newline => 1,
             _ => 0
+        }
+    }
+
+    pub fn print(&self, rules: &AnsiRenderRules) -> String {
+        match self {
+            Self::Reset => String::from("\x1b[0m"),
+            Self::Spaces(val) => repeat_string(" ", val),
+            Self::Newline => String::from("\n"),
+            Self::Text(val) => val.clone(),
+            Self::Ansi(style) => {
+                if !rules.ansi {
+                    String::new()
+                } else {
+                    style.render(rules.xterm256, false)
+                }
+            }.
         }
     }
 }
@@ -243,6 +268,78 @@ impl AnsiStyle {
     }
 }
 
+// We only care about CsiDispatch for AnsiStyle. Everythign else will be ignored.
+impl VTActor for AnsiStyle {
+    fn print(&mut self, b: char) {}
+
+    fn execute_c0_or_c1(&mut self, control: u8) {}
+
+    fn dcs_hook(&mut self, params: &[i64], intermediates: &[u8], ignored_excess_intermediates: bool) {}
+
+    fn dcs_put(&mut self, byte: u8) {}
+
+    fn dcs_unhook(&mut self) {}
+
+    fn esc_dispatch(&mut self, params: &[i64], intermediates: &[u8], ignored_excess_intermediates: bool, byte: u8) {}
+
+    fn osc_dispatch(&mut self, params: &[&[u8]]) {}
+
+    fn csi_dispatch(&mut self, params: &[i64], intermediates: &[u8], ignored_excess_intermediates: bool, byte: u8) {
+        let mut state = AnsiParseState::Normal;
+
+        for i in params.iter() {
+            let num = *i as u8;
+            match state {
+                AnsiParseState::Normal => {
+                    match num {
+                        0 => self.reset(),
+                        1 => self.hilite = true,
+                        2 => self.dim = true,
+                        3 => self.italic = true,
+                        4 => self.underline = true,
+                        5 => self.blink = true,
+                        8 => self.conceal = true,
+                        9 => self.strike = true,
+                        30..37 => self.fg = Some(ColorCode::Ansi(num.clone())),
+                        40..47 => self.bg = Some(ColorCode::Ansi(num.clone())),
+                        38 => state = AnsiParseState::XtermFg1,
+                        48 => state = AnsiParseState::XtermBg1,
+                        _ => {}
+                    }
+
+                },
+                AnsiParseState::XtermBg1 => {
+                    match num {
+                        5 => state = AnsiParseState::XtermBg2,
+                        _ => state = AnsiParseState::Normal
+                    }
+                },
+                AnsiParseState::XtermBg2 => {
+                    self.bg = Some(ColorCode::Xterm(num));
+                    state = AnsiParseState::Normal;
+                },
+                AnsiParseState::XtermFg1 => {
+                    match num {
+                        5 => state = AnsiParseState::XtermFg2,
+                        _ => state = AnsiParseState::Normal
+                    }
+                },
+                AnsiParseState::XtermFg2 => {
+                    self.fg = Some(ColorCode::Xterm(num));
+                    state = AnsiParseState::Normal;
+                }
+            }
+        }
+    }
+}
+
+enum AnsiParseState {
+    Normal,
+    XtermBg1,
+    XtermBg2,
+    XtermFg1,
+    XtermFg2
+}
 
 #[derive(Clone, Debug)]
 pub enum Wrapping {
@@ -254,7 +351,7 @@ pub enum Wrapping {
 pub struct AnsiRenderRules {
     pub ansi: bool,
     pub xterm256: bool,
-    pub line_length: usize,
+    pub max_width: usize,
     pub max_lines: usize,
     pub wrap_style: Wrapping,
     pub ansi_style: Option<AnsiStyle>
@@ -265,7 +362,7 @@ impl Default for AnsiRenderRules {
         Self {
             ansi: false,
             xterm256: false,
-            line_length: usize::MAX,
+            max_width: usize::MAX,
             max_lines: usize::MAX,
             wrap_style: Wrapping::Word,
             ansi_style: None
@@ -276,7 +373,7 @@ impl Default for AnsiRenderRules {
 #[derive(Default, Clone, Debug)]
 pub struct AnsiLine {
     pub text: String,
-    pub length: usize
+    pub width: usize
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -298,230 +395,26 @@ impl AnsiString {
         self.tokens.iter().map(|t| t.len()).sum()
     }
 
+    fn render(&self, rules: &AnsiRenderRules) -> AnsiLine {
+        // Simply converts Tokens into ANSI
+        let mut out = String::new();
+
+        for tok in self.tokens.iter() {
+
+        }
+
+    }
+
     pub fn render_lines(&self, rules: &AnsiRenderRules) -> Vec<AnsiLine> {
         let mut out_vec: Vec<AnsiLine> = Default::default();
         let mut current_style = rules.ansi_style.clone().unwrap_or_default();
         let use_ansi = (rules.ansi || rules.xterm256);
-        let mut remaining_length: usize = 0;
-        let mut ansi_changed = false;
-
-        let mut token_line: Vec<AnsiToken> = Default::default();
-        let mut token_lines: Vec<Vec<AnsiToken>> = Default::default();
-
-        // For this first iteration, we are going to handle word wrapping/truncation and max
-        // lines.
-        for tok in self.tokens.iter() {
-            let tok_len = tok.len();
-            match tok {
-                AnsiToken::Text(val) => {
-                    // This is guaranteed to be a bunch of non-ansi, non-whitespace. It's
-                    // probably a whole world, or hyphenated-underscored-weirdness.
-                    // If there's enough room to fit this on the current line, then pass the
-                    // token on directly. If not, we need to split it...
-                    if tok_len <= remaining_length {
-                        token_line.push(tok.clone());
-                        remaining_length = remaining_length - tok_len;
-                    } else {
-                        // In this case, we're going to have to split it and pass new tokens.
-                        // There are two different logical approaches.
-                        let mut break_again = false;
-                        match rules.wrap_style {
-                            Wrapping::Letter => {
-                                // In letter style, a character is a character, just as if it were
-                                // a space. This can mean that words are split up casually.
-                                let mut piece = val.slice(0..val.len()).unwrap();
-                                if remaining_length > 0 {
-                                    // If there is any remaining length we need to append whatever we have...
-                                    // Am just unwrapping. It's impossible for this to panic.
-                                    piece = val.slice(0..remaining_length).unwrap();
-                                    token_line.push(AnsiToken::Text(String::from(piece)));
-                                    remaining_length = rules.line_length;
-                                    token_lines.push(token_line.clone());
-                                    token_line.clear();
-                                    if token_lines.len() >= rules.max_lines {
-                                        break;
-                                    }
-                                }
-                                for chr in piece.chars() {
 
 
-                                    if remaining_length == 0 {
 
-                                    }
-                                }
-                                for i in 0..piece.len()/rules.line_length {
-                                    if let Some(sli) = piece.slice() {
-                                        token_line.push(AnsiToken::Text(String::from(sli)));
-                                        token_lines.push(token_line.clone());
-                                        token_line.clear();
-                                        remaining_length = rules.line_length - sli.len();
-                                        if token_lines.len() >= rules.max_lines {
-                                            // Since we are already INSIDE a for loop, then we need to break the
-                                            // outer one.
-                                            break_again = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if break_again {
-                                    break;
-                                }
-                            },
-                            Wrapping::Word => {
-                                // In Word style, a word that cannot fit on remaining space will
-                                // instead begin on the next line. If it still can't fit, then we
-                                // progress in the same manner as Letter style.
-                                // If this pushes us immediately beyond max lines, oh well... this
-                                // word won't be shown.
-                                token_lines.push(token_line.clone());
-                                token_line.clear();
-                                if token_lines.len() >= rules.max_lines {
-                                    break;
-                                }
-                                for p in val.as_bytes().chunks(rules.line_length) {
-                                    token_line.push(AnsiToken::Text(String::from(p)));
-                                    token_lines.push(token_line.clone());
-                                    token_line.clear();
-                                    remaining_length = rules.line_length - p.len();
-                                    if token_lines.len() >= rules.max_lines {
-                                        // Since we are already INSIDE a for loop, then we need to break the
-                                        // outer one.
-                                        break_again = true;
-                                        break;
-                                    }
-                                }
-                                if break_again {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                },
-                AnsiToken::Spaces(len) => {
-                    // This is basically the exact same process as with text.
-                    if tok_len <= remaining_length {
-                        token_line.push(tok.clone());
-                        remaining_length = remaining_length - tok_len;
-                    } else {
-                        let mut spaces_left = tok_len;
-                        // In this case, we're going to have to split it and pass new tokens.
-                        if remaining_length > 0 {
-                            // If there is any remaining length we need to append whatever we have...
-                            // Am just unwrapping. It's impossible for this to panic.
-                            token_line.push(AnsiToken::Spaces(remaining_length));
-                            spaces_left = spaces_left - remaining_length;
-                            remaining_length = rules.line_length;
-                            token_lines.push(token_line.clone());
-                            token_line.clear();
-                            if token_lines.len() >= rules.max_lines {
-                                break;
-                            }
-                        }
-                        let mut break_again = false;
-                        // The process for spaces is to simply insert (spaces_left / line_length)
-                        // lines, then a token with the modulo. Easy.
+        let dictionary = Standard::from_embedded(Language::EnglishUS).unwrap();
+        let wrapper = Wrapper::with_splitter(rules.line_length, dictionary);
 
-                        for _ in 1..spaces_left/rules.line_length {
-                            token_line.push(AnsiToken::Spaces(rules.line_length));
-                            token_lines.push(token_line.clone());
-                            token_line.clear();
-                            if token_lines.len() >= rules.max_lines {
-                                // Since we are already INSIDE a for loop, then we need to break the
-                                // outer one.
-                                break_again = true;
-                                break;
-                            }
-                        }
-                        if break_again {
-                            break;
-                        }
-                        let remainder = spaces_left%rules.line_length;
-
-                        if remainder > 0 {
-                            token_line.push(AnsiToken::Spaces(remainder));
-                            token_lines.push(token_line.clone());
-                            token_line.clear();
-                        }
-                    }
-                },
-                AnsiToken::Newline => {
-                    token_lines.push(token_line.clone());
-                    token_line.clear();
-                    remaining_length = rules.line_length;
-                    if token_lines.len() >= rules.max_lines {
-                        break;
-                    }
-                },
-                AnsiToken::Ansi(style) => {
-                    // Every AnsiStyle that's received will lazily wait until text or spaces
-                    // before it is printed. This is done to prevent wasting ANSI prints at
-                    // the end of lines.
-                    if use_ansi {
-                        token_line.push(tok.clone());
-                    }
-                },
-                AnsiToken::Reset => {
-                    if use_ansi {
-                        token_line.push(tok.clone());
-                    }
-                }
-            }
-        }
-        if token_line.len() > 0 {
-            // Seems there was leftover input in this one.
-            token_lines.push(token_line.clone());
-            token_line.clear()
-        }
-
-        // Now that we have formatted all of the text properly, we iterate once more to fill out_vec
-        // with ansilines. At this point, we no longer need to care about whether the line is the
-        // right size. Just generate the ANSI text and 'apparent' length and stuff it into an
-        // AnsiLine.
-        for line in token_lines.iter() {
-            let mut out_str = String::new();
-            let mut line_length: usize = 0;
-
-
-            if use_ansi {
-                // Each new line should inherit the current ANSI style if using ansi.
-                out_str.push_str(&current_style.render(rules.xterm256, true));
-            }
-
-            for tok in line.iter() {
-                // We will be ignoring newlines since that's what each vector IS...
-                line_length = line_length + tok.len();
-                match tok {
-                    AnsiToken::Ansi(style) => {
-                        // If use_ansi is disabled, the vector won't even contain Ansi or Reset.
-                        if !current_style.eq(style) {
-                            out_str.push_str(&current_style.difference(style, rules.xterm256));
-                            current_style = style.clone();
-                        }
-                    },
-                    AnsiToken::Text(val) => {
-                        out_str.push_str(val);
-                    },
-                    AnsiToken::Spaces(len) => {
-                        out_str.push_str(&repeat_string(" ", len.clone()));
-                    },
-                    AnsiToken::Reset => {
-                        current_style = AnsiStyle::default();
-                        out_str.push_str("\x1b[0m");
-                    },
-                    _ => {}
-                }
-            }
-
-            if use_ansi {
-                // When using ANSI, terminate each line with an ansi reset.
-                out_str.push_str("\x1b[0m");
-            }
-
-            out_vec.push(AnsiLine {
-                text: out_str,
-                length: line_length
-            })
-        }
         out_vec
     }
 }
