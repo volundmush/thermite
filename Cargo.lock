@@ -1395,9 +1395,8 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "thermite-ansi",
- "thermite-conn",
  "thermite-net",
+ "thermite-protocol",
  "thermite-telnet",
  "tokio",
  "tokio-diesel",
@@ -1417,21 +1416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "thermite-conn"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "serde",
- "serde_derive",
- "serde_json",
- "thermite-net",
- "thermite-telnet",
- "tokio",
- "tokio-tungstenite",
- "tungstenite",
-]
-
-[[package]]
 name = "thermite-net"
 version = "0.1.0"
 dependencies = [
@@ -1439,6 +1423,24 @@ dependencies = [
  "futures-core",
  "tokio",
  "tokio-rustls",
+]
+
+[[package]]
+name = "thermite-protocol"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "thermite-net",
+ "thermite-telnet",
+ "thermite-util",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tungstenite",
 ]
 
 [[package]]

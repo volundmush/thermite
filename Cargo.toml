@@ -5,6 +5,6 @@ members = [
     "thermite-net",
     "thermite-telnet",
     "thermite-ansi",
-    "thermite-conn",
+    "thermite-protocol",
     "thermite"
 ]

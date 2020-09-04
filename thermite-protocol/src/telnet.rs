@@ -3,7 +3,6 @@ use std::{
     io,
     vec::Vec,
     net::SocketAddr,
-    convert::TryInto,
     time::Duration,
     sync::Arc
 };
@@ -11,8 +10,7 @@ use std::{
 use tokio::{
     prelude::*,
     sync::mpsc::{Receiver, Sender, channel},
-    time,
-    task
+    time
 };
 
 use tokio_util::codec::{Framed};
@@ -24,11 +22,14 @@ use futures::{
     stream::{StreamExt}
 };
 
-use thermite_net::{Msg2Factory, FactoryLink};
-use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent};
+use serde_json::Value as JsonValue;
 
-use crate::{Msg2ConnectionManager, Msg2MudConnection, ConnectionLink,
-            ConnectionCapabilities};
+use thermite_net::{Msg2Factory, FactoryLink};
+use thermite_telnet::{TelnetCodec, codes as tc, TelnetEvent, TelnetConnectionMode, TelnetConnectionType};
+use thermite_util::text::generate_id;
+
+use crate::{Msg2ProtocolManager, Msg2MudProtocol, ProtocolLink,
+            ProtocolCapabilities};
 
 #[derive(Default, Clone)]
 pub struct TelnetOptionPerspective {
@@ -115,8 +116,8 @@ impl Default for TelnetConfig {
 }
 
 impl TelnetConfig {
-    pub fn capabilities(&self) -> ConnectionCapabilities {
-        ConnectionCapabilities {
+    pub fn capabilities(&self) -> ProtocolCapabilities {
+        ProtocolCapabilities {
             client_name: self.client_name.clone(),
             client_version: self.client_version.clone(),
             utf8: self.utf8.clone(),
@@ -143,22 +144,27 @@ pub struct TelnetProtocol<T> {
     tls: bool,
     config: TelnetConfig,
     handshakes_left: HashSet<u8>,
+    ttype_count: u8,
+    ttype_pending: bool,
+    ttype_last: Option<String>,
     conn: Framed<T, TelnetCodec>,
-    pub tx_connection: Sender<Msg2MudConnection>,
-    rx_connection: Receiver<Msg2MudConnection>,
-    tx_manager: Sender<Msg2ConnectionManager>
+    active: bool,
+    sent_link: bool,
+    pub tx_protocol: Sender<Msg2MudProtocol>,
+    rx_protocol: Receiver<Msg2MudProtocol>,
+    tx_manager: Sender<Msg2ProtocolManager>
 }
 
 
 impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync {
     pub fn new(conn_id: String, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool,
-               tx_manager: Sender<Msg2ConnectionManager>, telnet_options: Arc<HashMap<u8, TelnetOption>>,
+               tx_manager: Sender<Msg2ProtocolManager>, telnet_options: Arc<HashMap<u8, TelnetOption>>,
                op_state: HashMap<u8, TelnetOptionState>) -> Self {
 
-        let (tx_connection, rx_connection) = channel(50);
+        let (tx_protocol, rx_protocol) = channel(50);
 
         let mut handshakes_left: HashSet<u8> = Default::default();
-        for (k, v) in op_state.iter() {
+        for (k, _v) in op_state.iter() {
             handshakes_left.insert(k.clone());
         }
 
@@ -170,33 +176,63 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             conn,
             config: TelnetConfig::default(),
             handshakes_left,
-            tx_connection,
-            rx_connection,
+            tx_protocol,
+            rx_protocol,
             tx_manager,
+            ttype_count: 0,
+            ttype_pending: false,
+            ttype_last: None,
+            active: false,
+            sent_link: false,
             tls
         }
     }
 
-    fn link(&self) -> ConnectionLink {
-        ConnectionLink {
+    fn link(&self) -> ProtocolLink {
+        ProtocolLink {
             conn_id: self.conn_id.clone(),
             addr: self.addr.clone(),
             tls: self.tls.clone(),
             capabilities: self.config.capabilities(),
-            tx_session: self.tx_session.clone()
+            tx_protocol: self.tx_protocol.clone()
         }
+    }
+
+    async fn process_handshake(&mut self, op: u8) {
+        if self.handshakes_left.contains(&op) {
+            self.handshakes_left.remove(&op);
+        }
+        let _ = self.check_ready().await;
+    }
+
+    async fn check_ready(&mut self) {
+        if self.active || self.sent_link {
+            return;
+        }
+        if self.handshakes_left.len() == 0 && !self.ttype_pending {
+            let _ = self.tx_manager.send(Msg2ProtocolManager::NewProtocol(self.link())).await;
+            self.sent_link = true;
+        }
+    }
+
+    async fn get_ready(&mut self) {
+        if self.active || self.sent_link {
+            return;
+        }
+        let _ = self.tx_manager.send(Msg2ProtocolManager::NewProtocol(self.link())).await;
+        self.sent_link = true;
     }
 
     pub async fn run(&mut self, opening: Bytes) {
         
         // Just packing all of this together so it gets sent at once.
-        let _ = self.conn.send(TelnetEvent::Data(raw_bytes)).await;
+        let _ = self.conn.send(TelnetEvent::Data(opening)).await;
         let mut send_chan = self.tx_protocol.clone();
 
         // Ready a message to fire off quickly for in case
-        let mut ready_task = tokio::spawn(async move {
+        let ready_task = tokio::spawn(async move {
             time::delay_for(Duration::from_millis(500)).await;
-            let _ = send_chan.send(Msg2MudConnection::ProtocolReady).await;
+            let _ = send_chan.send(Msg2MudProtocol::GetReady).await;
             ()
         });
 
@@ -204,40 +240,49 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             tokio::select! {
                 t_msg = self.conn.next() => {
                     if let Some(msg) = t_msg {
-                        if let Ok(msg) = msg {
-                            match msg {
-                                TelnetEvent::Data(data) => self.receive_data(data).await,
-                                TelnetEvent::Line(text) => self.receive_line(text).await,
-                                TelnetEvent::SubNegotiate(op, data) => self.receive_sub(op, data).await,
-                                TelnetEvent::Negotiate(comm, op) => self.receive_negotiate(comm, op).await,
-                                TelnetEvent::NAWS(width, height) => self.receive_naws(width, height).await;
-                                TelnetEvent::TTYPE(text) => self.receive_ttype(text).await;
-                                TelnetEvent::Error(err) => {},
-                                TelnetEvent::Command(byte) => {},
+                        match msg {
+                            Ok(msg) => {
+                                println!("Got Telnet Event! {:?}", msg);
+                                match msg {
+                                    TelnetEvent::Line(text) => self.receive_line(text).await,
+                                    TelnetEvent::SubNegotiate(op, data) => self.receive_sub(op, data).await,
+                                    TelnetEvent::Negotiate(comm, op) => self.receive_negotiate(comm, op).await,
+                                    TelnetEvent::NAWS(width, height) => self.receive_naws(width, height).await,
+                                    TelnetEvent::TTYPE(text) => self.receive_ttype(text).await,
+                                    TelnetEvent::Command(byte) => {},
+                                    TelnetEvent::GMCP(command, json) => {},
+                                    _ => {}
+                                }
+                            },
+                            Err(e) => {
+                                println!("GOT ERROR: {:?}", e);
                             }
                         }
                     }
                 },
-                p_msg = self.rx_connection.recv() => {
+                p_msg = self.rx_protocol.recv() => {
                     if let Some(msg) = p_msg {
                         match msg {
-                            Msg2MudConnection::Disconnect => {
+                            Msg2MudProtocol::Disconnect => {
                                 break;
                             },
-                            Msg2MudConnection::Line(text) => {
+                            Msg2MudProtocol::Line(text) => {
 
                             },
-                            Msg2MudConnection::Prompt(text) => {
+                            Msg2MudProtocol::Prompt(text) => {
 
                             },
-                            Msg2MudConnection::Data => {
+                            Msg2MudProtocol::OOB(String, JsonValue) => {
 
                             },
-                            Msg2MudConnection::MSSP => {
+                            Msg2MudProtocol::MSSP => {
 
                             },
-                            Msg2MudConnection::Ready => {
-
+                            Msg2MudProtocol::Ready => {
+                                self.active = true;
+                            }
+                            Msg2MudProtocol::GetReady => {
+                                let _ = self.get_ready().await;
                             }
                         }
                     }
@@ -248,70 +293,101 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
 
     async fn receive_negotiate(&mut self, command: u8, op: u8) {
         // This means we received an IAC will/wont/do/dont...
+        let mut handshake: u8 = 0;
+        let mut enable_local = false;
+        let mut disable_local = false;
+        let mut enable_remote = false;
+        let mut disable_remote = false;
+        let mut respond: u8 = 0;
+
         if let Some(state) = self.op_state.get_mut(&op) {
             // We DO have a handler for this option... that means we support it!
 
             match command {
                 tc::WILL => {
-                    // The client has sent a WILL. They either want to Locally-Enable op, or are
+                    // The remote host has sent a WILL. They either want to Locally-Enable op, or are
                     // doing so at our request.
-                    if state.remote.negotiating {
-                        state.remote.negotiating = false;
-                        if !state.remote.enabled {
-                            state.remote.enabled = true;
-                            let _ = self.enable_remote(op).await;
+                    if !state.remote.enabled {
+                        if state.remote.negotiating {
+                            state.remote.negotiating = false;
                         }
-                    } else {
-                        state.remote.negotiating = true;
-                        let _ = self.conn.send(TelnetEvent::Negotiate(tc::DO, op)).await;
+                        else {
+                            respond = tc::DO;
+                        }
+                        handshake = op;
+                        enable_remote = true;
+                        state.remote.enabled = true;
                     }
                 },
                 tc::WONT => {
                     // The client has refused an option we wanted to enable. Alternatively, it has
                     // disabled an option that was on.
+                    if state.remote.negotiating {
+                        handshake = op;
+                    }
                     state.remote.negotiating = false;
                     if state.remote.enabled {
+                        disable_remote = true;
                         state.remote.enabled = false;
-                        let _ = self.disable_remote(op).await;
                     }
                 },
                 tc::DO => {
                     // The client wants the Server to enable Option, or they are acknowledging our
                     // desire to do so.
-                    if state.local.negotiating {
-                        if !state.local.enabled {
-                            state.local.enabled = true;
-                            let _ = self.enable_local(op).await;
+                    if !state.local.enabled {
+                        if state.local.negotiating {
+                            state.local.negotiating = false;
                         }
-                    } else {
-                        state.local.negotiating = true;
-                        let _ = self.conn.send(TelnetEvent::Negotiate(tc::WILL, op)).await;
+                        else {
+                            respond = tc::WILL;
+                        }
+                        handshake = op;
+                        enable_local = true;
+                        state.local.enabled = true;
                     }
                 },
                 tc::DONT => {
                     // The client wants the server to disable Option, or are they are refusing our
                     // desire to do so.
+                    if state.local.negotiating {
+                        handshake = op;
+                    }
                     state.local.negotiating = false;
                     if state.local.enabled {
-                        state.local.enabled = false;
-                        let _ = self.disable_local(op).await;
+                        disable_local = true;
+                        state.local.enabled = false
                     }
                 },
                 _ => {
                     // This cannot actually happen.
                 }
             }
-
         } else {
             // We do not have a handler for this option, whatever it is... do not support.
-            let response = match command {
+            respond = match command {
                 tc::WILL => tc::DONT,
                 tc::DO => tc::WONT,
                 _ => 0
             };
-            if response > 0 {
-                let _ = self.conn.send(TelnetEvent::Negotiate(response, op)).await;
-            }
+        }
+        
+        if respond > 0 {
+            let _ = self.conn.send(TelnetEvent::Negotiate(respond, op)).await;
+        }
+        if enable_local {
+            let _ = self.enable_local(op).await;
+        }
+        if disable_local {
+            let _ = self.disable_local(op).await;
+        }
+        if enable_remote {
+            let _ = self.enable_remote(op).await;
+        }
+        if disable_remote {
+            let _ = self.disable_remote(op).await;
+        }
+        if handshake > 0 {
+            let _ = self.process_handshake(handshake).await;
         }
     }
 
@@ -319,6 +395,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         match op {
             tc::NAWS => self.config.naws = true,
             tc::TTYPE => {
+                self.ttype_pending = true;
                 self.request_ttype().await;
             },
             tc::LINEMODE => self.config.linemode = true,
@@ -330,7 +407,11 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
 
     async fn disable_remote(&mut self, op: u8) {
         match op {
-            tc::NAWS => self.config.naws = false,
+            tc::NAWS => {
+                self.config.naws = false;
+                self.config.width = 78;
+                self.config.height = 24;
+            }
             tc::TTYPE => self.config.ttype = false,
             tc::LINEMODE => self.config.linemode = false,
             _ => {
@@ -347,7 +428,8 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             tc::MCCP2 => {
                 // Upon getting the OK from the client to use MCCP2, IMMEDIATELY enable the compression.
                 // The codec will handle this.
-                let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MCCP2, Bytes::with_capacity(0))).await;
+                let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MCCP2, BytesMut::with_capacity(0).freeze())).await;
+                let _ = self.conn.send(TelnetEvent::OutgoingCompression(true)).await;
             }
             _ => {
                 
@@ -366,8 +448,8 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             return;
         }
         match op {
-            tc::MCCP2 => {
-                // This is already enabled by the reader.
+            tc::MCCP3 => {
+                let _ = self.conn.send(TelnetEvent::IncomingCompression(true)).await;
             },
             _ => {
 
@@ -375,81 +457,69 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         }
     }
 
-    async fn receive_line(&mut self, data: Vec<u8>) {
-        // This is a line that has already been determined to end in CRLF.
-        // This can be directly converted to text.
-        let data = String::from_utf8(data);
-        if let Ok(text) = data {
-            // Only if we can decode this text, and only if we have a linked session, do we pass the
-            // text on.
-            let maybe_chan = self.tx_session.clone();
-            if let Some(mut chan) = maybe_chan {
-                let _ = chan.send(Msg2Connection::ClientCommand(text)).await;
-            }
+    async fn receive_line(&mut self, text: String) {
+        // No commands will be sent until the Protocol has been recognized by the ProtocolManager.
+        println!("RECEIVED LINE: {}", text);
+        if self.active {
+            let _ = self.tx_manager.send(Msg2ProtocolManager::ProtocolCommand(self.conn_id.clone(), text)).await;
         }
-    }
-
-    async fn receive_data(&mut self, data: u8) {
-        // I do not want to be receiving single bytes.
-    }
-
-    async fn send_empty_sub(&mut self, op: u8) {
-        let data: Vec<u8> = Vec::default();
-        self.send_sub_data(op, data).await;
     }
 
     async fn request_ttype(&mut self) {
-        let data: Vec<u8> = vec![1];
-        self.send_sub_data(tc::TTYPE, data).await;
+        let mut data = BytesMut::with_capacity(1);
+        data.put_u8(1);
+        let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::TTYPE, data.freeze())).await;
     }
 
     async fn receive_ttype(&mut self, incoming: String) {
-        if !self.handshakes_left_2.contains(&252)
-            && !self.handshakes_left_2.contains(&253)
-            && !self.handshakes_left_2.contains(&254) {
+        // This is already guaranteed to be good TTYPE data thanks to the TelnetCodec. 'IS' has been
+        // stripped, leaving only the following UTF8 text.
+
+        // Ignore if ttype has already been finished.
+        if !self.ttype_pending {
             return;
         }
 
-        if incoming.len() == 0 {
-            // Not sure how we ended up an empty string, but not gonna allow it.
-            return;
-        }
+        let upper = incoming.to_uppercase();
 
-        incoming = incoming.to_uppercase();
-
-        let run_first = self.handshakes_left_2.contains(&252);
-
-        if run_first {
-            self.ttype_first = Some(data.clone());
-            self.receive_ttype_0(incoming).await;
-            self.process_handshake(252).await;
-            self.request_ttype().await;
-            return;
-        }
-
-        let run_second = self.handshakes_left_2.contains(&253);
-
-        if run_second {
-            let t_first = self.ttype_first.clone();
-            if let Some(first) = t_first {
-                if first.eq(&data) {
-                    // This client does not support advanced ttype. Ignore further
-                    // calls to TTYPE and consider this complete.
-                    self.process_handshake(253).await;
-                    self.process_handshake(254).await;
-                } else {
-                    self.receive_ttype_1(incoming).await;
-                    self.process_handshake(253).await;
-                    self.request_ttype().await;
+        match self.ttype_count {
+            0 => {
+                self.ttype_last = Some(upper.clone());
+                let _ = self.receive_ttype_0(upper.clone()).await;
+                self.ttype_count += 1;
+                let _ = self.request_ttype().await;
+                return;
+            },
+            1 | 2 => {
+                if let Some(last) = self.ttype_last.clone() {
+                    if last.eq(&upper) {
+                        // This client does not support advanced ttype. Ignore further
+                        // calls to TTYPE and consider this complete.
+                        self.ttype_pending = false;
+                        self.ttype_last = None;
+                        let _ = self.check_ready().await;
+                    } else {
+                        match self.ttype_count {
+                            1 => {
+                                let _ = self.receive_ttype_1(upper.clone()).await;
+                                self.ttype_last = Some(upper.clone());
+                                let _ = self.request_ttype().await;
+                            },
+                            2 => {
+                                let _ = self.receive_ttype_2(upper.clone()).await;
+                                self.ttype_last = None;
+                                self.ttype_pending = false;
+                                let _ = self.check_ready().await;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
+                return;
             }
-            return;
-        }
-
-        let run_third = self.handshakes_left_2.contains(&254);
-        if run_third {
-            self.receive_ttype_2(incoming).await;
-            self.process_handshake(254).await;
+            _ => {
+                // This shouldn't happen.
+            }
         }
     }
 
@@ -556,18 +626,13 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         if (128 & mtts) == 128 {
             self.config.proxy = true;
         }
-        if (256 & mtts == 256) {
+        if (256 & mtts) == 256 {
             self.config.truecolor = true;
         }
-        if (512 & mtts == 512) {
+        if (512 & mtts) == 512 {
             self.config.mnes = true;
         }
     }
-
-    async fn receive_ttype_basic(&mut self) {
-        // Not sure if anything needs to happen here yet...
-    }
-
 
     async fn receive_naws(&mut self, width: u16, height: u16) {
         self.config.width = width;
@@ -582,10 +647,12 @@ pub struct TelnetProtocolFactory {
     telnet_options: Arc<HashMap<u8, TelnetOption>>,
     telnet_statedef: HashMap<u8, TelnetOptionState>,
     opening_bytes: Bytes,
+    tx_manager: Sender<Msg2ProtocolManager>,
+    ids: HashSet<String>,
 }
 
 impl TelnetProtocolFactory {
-    pub fn new(factory_id: String, options: HashMap<u8, TelnetOption>) -> Self {
+    pub fn new(factory_id: String, options: HashMap<u8, TelnetOption>, tx_manager: Sender<Msg2ProtocolManager>) -> Self {
         let (tx_factory, rx_factory) = channel(50);
 
         // Since this only needs to be done once... we'll clone it from here.
@@ -617,7 +684,9 @@ impl TelnetProtocolFactory {
             rx_factory,
             telnet_options: Arc::new(options),
             telnet_statedef: opstates,
-            opening_bytes: raw_bytes.freeze()
+            opening_bytes: raw_bytes.freeze(),
+            tx_manager,
+            ids: HashSet::default()
         }
     }
 
@@ -649,16 +718,13 @@ impl TelnetProtocolFactory {
     fn accept<C>(&mut self, conn: C, addr: SocketAddr, tls: bool)
         where C: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync
     {
-        let telnet_codec = Framed::new(conn, TelnetCodec::new(true));
+        let telnet_codec = Framed::new(conn, TelnetCodec::new(TelnetConnectionType::Server, TelnetConnectionMode::Mud, 8192));
+        let gen_id = generate_id(12, &self.ids);
+        let conn_id = format!("{}_{}", self.factory_id, gen_id);
+        self.ids.insert(gen_id);
 
-        
-        let (tx_mudtel, rx_mudtel) = channel(50);
-        let (tx_mudconn, rx_mudconn) = channel(50);
-
-        let conn_id = self.generate_id();
-
-        let tel_prot = MudTelnetProtocol::new(conn_id, telnet_codec, tx_mudtel, rx_mudtel, tx_mudconn, self.telnet_options.clone(), self.telnet_statedef.clone());
-
-
+        let mut tel_prot = TelnetProtocol::new(conn_id, telnet_codec, addr, tls, self.tx_manager.clone(), self.telnet_options.clone(), self.telnet_statedef.clone());
+        let opening = self.opening_bytes.clone();
+        let _ = tokio::spawn(async move {tel_prot.run(opening).await;});
     }
 }

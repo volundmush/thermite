@@ -1,5 +1,5 @@
 [package]
-name = "thermite-conn"
+name = "thermite-protocol"
 version = "0.1.0"
 authors = ["Andrew Bastien <volundmush@gmail.com>"]
 edition = "2018"
@@ -9,10 +9,13 @@ edition = "2018"
 [dependencies]
 thermite-telnet = {version = "0.1", path = "../thermite-telnet"}
 thermite-net = {version = "0.1", path = "../thermite-net"}
+thermite-util = {version = "0.1", path = "../thermite-util"}
 tungstenite = "0.11.1"
-tokio = {version = "0.2", features = ["sync", "tcp"]}
+tokio = {version = "0.2", features = ["sync", "tcp", "time"]}
 tokio-tungstenite = {version = "0.11", features = ["stream"]}
+tokio-util = {version = "0.3", features = ["codec"]}
 serde = "1.0.115"
 serde_derive = "1.0.115"
 serde_json = "1.0.57"
 bytes = "0.5.6"
+futures = "0.3.5"

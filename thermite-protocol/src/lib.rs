@@ -1,5 +1,5 @@
 use serde_json::Value as JsonValue;
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::mpsc::{Sender};
 use std::net::SocketAddr;
 
 pub mod telnet;
@@ -12,13 +12,14 @@ pub enum Msg2MudProtocol {
     OOB(String, JsonValue),
     // When a game requests a Mud Server Status Protocol message,
     MSSP,
+    GetReady,
     Ready
 }
 
-pub enum Msg2ConnectionManager {
-    NewConnection(ProtocolLink),
-    ConnectionCommand(String, String),
-    ConnectionDisconnected(String),
+pub enum Msg2ProtocolManager {
+    NewProtocol(ProtocolLink),
+    ProtocolCommand(String, String),
+    ProtocolDisconnected(String),
 }
 
 pub struct ProtocolCapabilities {
@@ -42,5 +43,5 @@ pub struct ProtocolLink {
     pub addr: SocketAddr,
     pub tls: bool,
     pub capabilities: ProtocolCapabilities,
-    pub tx_session: Sender<Msg2MudProtocol>
+    pub tx_protocol: Sender<Msg2MudProtocol>
 }

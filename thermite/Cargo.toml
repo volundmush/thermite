@@ -18,10 +18,10 @@ tokio-diesel = "0.3"
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
-thermite-ansi = {version = "0.1", path = "../thermite-ansi"}
+#thermite-ansi = {version = "0.1", path = "../thermite-ansi"}
 thermite-telnet = {version = "0.1", path = "../thermite-telnet"}
 thermite-net = {version = "0.1", path = "../thermite-net"}
-thermite-conn = {version = "0.1", path = "../thermite-conn"}
+thermite-protocol = {version = "0.1", path = "../thermite-protocol" }
 dotenv = "0.15"
 toml = "0.5"
 chrono = "0.4"

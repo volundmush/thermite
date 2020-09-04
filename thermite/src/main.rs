@@ -36,8 +36,10 @@ use thermite_telnet::{codes as tc};
 use thermite::{
     config::{Config, ServerConfig as ThermiteServer},
     db::DbManager,
-    telnet::{TelnetOption, TelnetProtocolFactory},
-    session::SessionManager
+    protocol::ProtocolManager
+};
+use thermite_protocol::{
+    telnet::{TelnetOption,TelnetProtocolFactory}
 };
 use std::str::FromStr;
 
@@ -79,25 +81,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tx_dbmanager = db.tx_dbmanager.clone();
     let db_task = tokio::spawn(async move {db.run().await});
 
-    let mut sess_manager = SessionManager::new();
-    let tx_manager = sess_manager.tx_manager.clone();
-    let sess_task = tokio::spawn(async move {sess_manager.run().await});
+    let mut prot_manager = ProtocolManager::new();
+    let tx_manager = prot_manager.tx_manager.clone();
+    let prot_task = tokio::spawn(async move {prot_manager.run().await});
 
     let mut portal = Portal::new();
 
-    let mut telnet_factory = TelnetProtocolFactory::new("telnet".parse().unwrap(), teloptions());
+    let mut telnet_factory = TelnetProtocolFactory::new("telnet".parse().unwrap(), teloptions(), tx_manager.clone());
     portal.register_factory(telnet_factory.link());
+
+    let tel_task = tokio::spawn(async move {telnet_factory.run().await});
 
     for (k, v) in conf.listeners.iter() {
 
-        let addr = interfaces.get(&v.interface).expect("Telnet Server attempting to use non-existent interface!");
+        let addr = conf.interfaces.get(&v.interface).expect("Telnet Server attempting to use non-existent interface!");
         let sock = SocketAddr::new(addr.clone(), v.port);
         let listener = TcpListener::bind(sock).await.expect("Could not bind server port... is it in use?");
 
         if let Some(tls_key) = &v.tls {
             // Will worry about TLS later...
         } else {
-            portal.listen(String::from(k), listener, None, &v.protocol.clone())?
+            portal.listen(String::from(k), listener, None, &v.protocol.clone());
         }
     }
     let portal_task = tokio::spawn(async move {portal.run().await});
