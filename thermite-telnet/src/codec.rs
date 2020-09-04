@@ -172,7 +172,8 @@ impl TelnetCodec {
             if self.in_data.len() > 0 {
                 let mut to_decomp = self.in_data.clone();
                 self.in_data.clear();
-                self.decompress_into(&mut to_decomp)?
+                self.decompress_into(&to_decomp)?
+            } else {
             }
         }
         Ok(())
@@ -181,9 +182,9 @@ impl TelnetCodec {
     fn decompress_into(&mut self, src: &BytesMut) -> Result<(), io::Error> {
         match self.unzipper.write_all(src.as_ref()) {
             Ok(()) => {
-                if let Err(e) = self.unzipper.flush() {
-                    return Err(e);
-                }
+                //if let Err(e) = self.unzipper.flush() {
+                //    return Err(e);
+                //}
                 let zbuf = self.unzipper.get_mut();
                 if self.in_data.remaining_mut() >= zbuf.len() {
                     self.in_data.put(zbuf.as_ref());
@@ -209,9 +210,8 @@ impl Decoder for TelnetCodec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         // src has the bytes from the stream. but we want to optionally decompress it into in_data
         if src.len() > 0 {
-            println!("GOT {} bytes!", src.len());
             if self.in_compress {
-                match self.decompress_into(src) {
+                match self.decompress_into(&src) {
                     Ok(_) => {},
                     Err(e) => return Err(e),
                 }
@@ -219,7 +219,6 @@ impl Decoder for TelnetCodec {
                 if self.in_data.remaining_mut() >= src.len() {
                     self.in_data.put(src.as_ref());
                 } else {
-                    println!("remaining of in_data is: {}", self.in_data.remaining_mut());
                     return Err(Self::Error::new(io::ErrorKind::InvalidData,
                                                 format!("Reached maximum buffer size of: {}", self.max_buffer)));
                 }
@@ -526,7 +525,7 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 self.out_data.put_u8(codes::SE);
             }
             TelnetEvent::IncomingCompression(op) => {
-                if op {
+                if op && !self.in_compress {
                     // We are enabling outgoing compression. set toggles and compress any buffered
                     // bytes in self.in_data
                     if let Err(e) = self.enable_incoming_compression() {

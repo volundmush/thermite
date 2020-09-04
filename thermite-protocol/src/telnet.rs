@@ -256,13 +256,17 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                             },
                             Err(e) => {
                                 println!("GOT ERROR: {:?}", e);
-                                if self.active {
+                                if self.sent_link {
                                     let _ = self.tx_manager.send(Msg2ProtocolManager::ProtocolDisconnected(self.conn_id.clone())).await;
                                 }
-                                let _ = self.conn.close().await;
                                 break;
                             }
                         }
+                    } else {
+                        if self.sent_link {
+                                    let _ = self.tx_manager.send(Msg2ProtocolManager::ProtocolDisconnected(self.conn_id.clone())).await;
+                                }
+                        break;
                     }
                 },
                 p_msg = self.rx_protocol.recv() => {
