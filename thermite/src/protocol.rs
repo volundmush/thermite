@@ -15,20 +15,26 @@ use thermite_protocol::{
     Msg2MudProtocol,
 };
 
+use crate::db::{
+    Msg2DbManager
+};
+
 pub struct ProtocolManager {
     protocols: HashMap<String, ProtocolLink>,
     pub tx_manager: Sender<Msg2ProtocolManager>,
-    rx_manager: Receiver<Msg2ProtocolManager>
+    rx_manager: Receiver<Msg2ProtocolManager>,
+    tx_db: Sender<Msg2DbManager>
 }
 
 impl ProtocolManager {
-    pub fn new() -> Self {
+    pub fn new(tx_db: Sender<Msg2DbManager>) -> Self {
         let (tx_manager, rx_manager) = channel(50);
 
         Self {
             protocols: Default::default(),
             tx_manager,
-            rx_manager
+            rx_manager,
+            tx_db
         }
     }
 

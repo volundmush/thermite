@@ -193,10 +193,10 @@ pub enum Token {
     Error
 }
 
-pub fn parse_evstring(raw: &str) -> Vec<AnsiToken> {
+pub fn parse_evstring(raw: &str) -> (Vec<AnsiToken>, String) {
     // This parses an EvString sequence and generates an ANSI-coded string for use with AnsiString.
     let mut out_vec: Vec<AnsiToken> = Vec::default();
-
+    let mut out_str = String::new();
     let mut current_style = AnsiStyle::new();
     let mut ansi_change = false;
 
@@ -212,18 +212,32 @@ pub fn parse_evstring(raw: &str) -> Vec<AnsiToken> {
                     ansi_change = false;
                 }
                 match tok {
-                    Token::Pipe => out_vec.push(AnsiToken::Text(String::from("|"))),
-                    Token::Crlf => out_vec.push(AnsiToken::Newline),
-                    Token::Tab => out_vec.push(AnsiToken::Spaces(4)),
-                    Token::Space => out_vec.push(AnsiToken::Spaces(1)),
+                    Token::Pipe => {
+                        out_vec.push(AnsiToken::Text(String::from("|")));
+                        out_str.push_str("|");
+                    }
+                    Token::Crlf => {
+                        out_vec.push(AnsiToken::Newline);
+                        out_str.push("\n");
+                    }
+                    Token::Tab => {
+                        out_vec.push(AnsiToken::Spaces(4));
+                        out_str.push_str("    ");
+                    }
+                    Token::Space => {
+                        out_vec.push(AnsiToken::Spaces(1));
+                        out_str.push_str(" ");
+                    },
                     Token::Spaces => {
                         if let Some(new_text) = raw.slice(span.clone()) {
                             out_vec.push(AnsiToken::Spaces(new_text.len()));
+                            out_str.push_str(new_text);
                         }
                     }
                     Token::Word => {
                         if let Some(new_text) = raw.slice(span.clone()) {
                             out_vec.push(AnsiToken::Text(String::from(new_text)));
+                            out_str.push_str(new_text);
                         }
                     }
                     _ => {}
@@ -284,7 +298,7 @@ pub fn parse_evstring(raw: &str) -> Vec<AnsiToken> {
             Token::Error => {}
         }
     }
-    out_vec
+    (out_vec, out_str)
 }
 
 
@@ -308,9 +322,11 @@ impl From<&str> for EvString {
 
 impl From<String> for EvString {
     fn from(src: String) -> Self {
+        let v, raw_string = parse_evstring(&src);
+
         Self {
-            ansi_string: AnsiString::from(parse_evstring(&src)),
-            raw_string: src
+            ansi_string: AnsiString::from(v),
+            raw_string
         }
     }
 }
@@ -319,14 +335,6 @@ impl From<EvString> for String {
     fn from(ev: EvString) -> Self {
         ev.raw_string
     }
-}
-
-impl EvString {
-
-    pub fn width(&self) -> usize {
-        self.ansi_string.width()
-    }
-
 }
 
 #[derive(Clone, Debug)]

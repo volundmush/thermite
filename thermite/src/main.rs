@@ -73,16 +73,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
 
-    // Setup PostGres via Diesel and Tokio-Diesel
-    let database_url = conf.database.get("postgres").expect("No database configured for 'postgres'!");
-    let db_manager = ConnectionManager::<PgConnection>::new(database_url);
-    let db_pool = Pool::builder().build(db_manager).expect("Could not start Database connection pool.");
-
-    let mut db = DbManager::new(db_pool);
+    // Setup Sqlite3 via Diesel and Tokio-Diesel
+    let database_url = conf.database.get("sqlite3").expect("No database configured for 'sqlite3'!");
+    let mut db = DbManager::new(database_url).expect("Could not start Database connection pool.");
     let tx_dbmanager = db.tx_dbmanager.clone();
+
     let db_task = tokio::spawn(async move {db.run().await});
 
-    let mut prot_manager = ProtocolManager::new();
+    let mut prot_manager = ProtocolManager::new(tx_dbmanager.clone());
     let tx_manager = prot_manager.tx_manager.clone();
     let prot_task = tokio::spawn(async move {prot_manager.run().await});
 

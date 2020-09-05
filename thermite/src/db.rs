@@ -9,6 +9,9 @@ use chrono::NaiveDateTime;
 use tokio::{
     sync::mpsc::{channel, Sender, Receiver}
 };
+use std::{
+    error::Error
+};
 
 // Request creation of a new user with this struct.
 pub struct ReqUserCreate {
@@ -101,13 +104,26 @@ pub struct DbManager{
 }
 
 impl DbManager {
-    pub fn new(pool: Pool<ConnectionManager<PgConnection>>) -> Self {
+    pub fn new(url: String) -> Result<Self, Box<dyn Error>> {
         let (tx_dbmanager, rx_dbmanager) = channel(50);
-        Self {
-            tx_dbmanager,
-            rx_dbmanager,
-            pool
+
+        let mut manager = ConnectionManager::<PgConnection>::new(url);
+        let mut pool = Pool::builder().build(manager);
+
+        match pool {
+            Ok(pool) => {
+                Ok(Self {
+                    tx_dbmanager,
+                    rx_dbmanager,
+                    pool
+                })
+            },
+            Err(e) => {
+                Err(e)
+            }
         }
+
+        
     }
 
     pub async fn run(&mut self) -> () {
