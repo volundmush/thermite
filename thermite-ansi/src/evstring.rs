@@ -281,6 +281,7 @@ pub fn parse_evstring(raw: &str) -> Vec<AnsiToken> {
                     current_style = new_style;
                 }
             },
+            Token::Error => {}
         }
     }
     out_vec
@@ -322,25 +323,10 @@ impl From<EvString> for String {
 
 impl EvString {
 
-    pub fn clean(&self) -> String {
-        self.ansi_string.plain()
-    }
-
     pub fn width(&self) -> usize {
         self.ansi_string.width()
     }
 
-    pub fn render(&self, ansi: bool, xterm256: bool) -> String {
-        self.ansi_string.render(ansi, xterm256)
-    }
-
-    pub fn left(&self, width: usize, ansi: bool, xterm256: bool, fill: bool) -> String {
-        self.ansi_string.left(width, ansi, xterm256, fill)
-    }
-
-    pub fn wrap_width(&self, ansi: bool, xterm256: bool, width: usize, fill: bool, truncate: bool) -> Vec<String> {
-        self.ansi_string.wrap_width(ansi, xterm256, width, fill, truncate)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -387,17 +373,6 @@ impl EvCell {
     pub fn render(&mut self, ansi: bool, xterm256: bool) -> Vec<String> {
         let mut vec_out: Vec<String> = Default::default();
 
-        let mut lines: Vec<String> = Default::default();
-
-        match self.wrap {
-            Wrap::WordWrap => {
-                lines = self.text.wrap_width(ansi, xterm256, self.width, false, false);
-            },
-            Wrap::Truncate => {
-                let line = self.text.left(self.width, ansi, xterm256, false);
-                lines.push(line);
-            }
-        }
         // We can trust that each line can fit within 'width' characters.
         vec_out
     }

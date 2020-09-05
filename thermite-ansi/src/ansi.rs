@@ -44,7 +44,7 @@ impl AnsiToken {
     pub fn print(&self, rules: &AnsiRenderRules) -> String {
         match self {
             Self::Reset => String::from("\x1b[0m"),
-            Self::Spaces(val) => repeat_string(" ", val),
+            Self::Spaces(val) => repeat_string(" ", *val),
             Self::Newline => String::from("\n"),
             Self::Text(val) => val.clone(),
             Self::Ansi(style) => {
@@ -53,7 +53,7 @@ impl AnsiToken {
                 } else {
                     style.render(rules.xterm256, false)
                 }
-            }.
+            }
         }
     }
 }
@@ -300,8 +300,8 @@ impl VTActor for AnsiStyle {
                         5 => self.blink = true,
                         8 => self.conceal = true,
                         9 => self.strike = true,
-                        30..37 => self.fg = Some(ColorCode::Ansi(num.clone())),
-                        40..47 => self.bg = Some(ColorCode::Ansi(num.clone())),
+                        30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 => self.fg = Some(ColorCode::Ansi(num.clone())),
+                        40 | 41 | 42 | 43 | 44 | 45 | 46 | 47 => self.bg = Some(ColorCode::Ansi(num.clone())),
                         38 => state = AnsiParseState::XtermFg1,
                         48 => state = AnsiParseState::XtermBg1,
                         _ => {}
@@ -376,6 +376,12 @@ pub struct AnsiLine {
     pub width: usize
 }
 
+impl From<AnsiLine> for String {
+    fn from(src: AnsiLine) -> Self {
+        src.text
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnsiString {
     pub tokens: Vec<AnsiToken>
@@ -395,25 +401,37 @@ impl AnsiString {
         self.tokens.iter().map(|t| t.len()).sum()
     }
 
-    fn render(&self, rules: &AnsiRenderRules) -> AnsiLine {
+    pub fn render(&self, rules: &AnsiRenderRules, prefix: bool) -> AnsiLine {
         // Simply converts Tokens into ANSI
-        let mut out = String::new();
+        let mut text = String::new();
+        let mut width: usize = 0;
 
-        for tok in self.tokens.iter() {
-
+        if prefix && rules.ansi {
+            if let Some(style) = &rules.ansi_style {
+                text.push_str(&style.render(rules.xterm256, true));
+            }
         }
 
+        for tok in self.tokens.iter() {
+            text.push_str(&tok.print(rules));
+            width += tok.len();
+        }
+
+        AnsiLine {
+            text,
+            width
+        }
     }
 
     pub fn render_lines(&self, rules: &AnsiRenderRules) -> Vec<AnsiLine> {
         let mut out_vec: Vec<AnsiLine> = Default::default();
         let mut current_style = rules.ansi_style.clone().unwrap_or_default();
-        let use_ansi = (rules.ansi || rules.xterm256);
+        let use_ansi = rules.ansi || rules.xterm256;
 
 
 
         let dictionary = Standard::from_embedded(Language::EnglishUS).unwrap();
-        let wrapper = Wrapper::with_splitter(rules.line_length, dictionary);
+        let wrapper = Wrapper::with_splitter(rules.max_width, dictionary);
 
         out_vec
     }

@@ -1,8 +1,10 @@
-use textwrap;
+use thermite_ansi::evstring::EvString;
+use thermite_ansi::ansi::{AnsiString, AnsiRenderRules};
 
 fn main() {
-    let mut disp = String::from("\x1b[31mTHIS TEXT IS SUPER DUPER\x1b[32m RED!\x1b[33m WHATCHA GONNA DO ABOUT IT?\x1b[0m");
-    let filled = textwrap::fill(&disp, 10);
-    println!("{:?}", filled);
-    println!("{}", filled);
+    let mut disp = EvString::from("THIS |ris very red|c and maybe blue |gor green");
+    let mut rules = AnsiRenderRules::default();
+    rules.ansi = true;
+    rules.xterm256 = true;
+    println!("{}", disp.ansi_string.render(&rules, false).text);
 }

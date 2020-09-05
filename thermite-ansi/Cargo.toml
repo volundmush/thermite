@@ -12,3 +12,4 @@ vtparse = "0.2"
 regex = "1.3"
 hyphenation = "0.8.0"
 thermite-util = {version = "0.1", path = "../thermite-util"}
+logos = "0.11"

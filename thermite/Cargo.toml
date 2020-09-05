@@ -27,5 +27,5 @@ toml = "0.5"
 chrono = "0.4"
 tungstenite = "0.11"
 tokio-tungstenite = {version = "0.11", features = ["stream"]}
-logos = "0.11"
+
 regex = "1.3"
