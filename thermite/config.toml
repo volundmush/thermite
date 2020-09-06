@@ -10,4 +10,4 @@ external = "0.0.0.0"
 telnet = {interface = "external", port = 7999, protocol="telnet"}
 
 [database]
-postgres = "postgres://thermite:thermite@localhost/thermite"
+sqlite3 = "thermite.sqlite3"

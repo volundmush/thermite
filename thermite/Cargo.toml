@@ -12,7 +12,7 @@ tokio-util = {version = "0.3", features = ["codec"]}
 tokio-rustls = "0.14"
 rand = "0.7"
 bytes = "0.5"
-diesel = {version = "1.4", features = ["postgres", "chrono", "serde_json"]}
+diesel = {version = "1.4", features = ["sqlite", "chrono", "serde_json"]}
 diesel_cli = "1.4"
 tokio-diesel = "0.3"
 serde = "1.0"
