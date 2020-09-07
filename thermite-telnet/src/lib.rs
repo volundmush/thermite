@@ -1,9 +1,3 @@
 pub mod codes;
-mod codec;
-
-pub use codec::{
-    TelnetCodec,
-    TelnetEvent,
-    TelnetConnectionMode,
-    TelnetConnectionType
-};
+pub mod codec;
+pub mod protocol;
