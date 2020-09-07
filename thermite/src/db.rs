@@ -20,64 +20,40 @@ pub struct ReqUserCreate {
 }
 
 // Request adding an email to a new user with this struct.
-pub struct ReqAddEmail {
-    pub user_id: i32,
-    pub email: String,
-    pub make_primary: bool
+pub struct ReqUserSetEmail {
+    pub user_id: isize,
+    pub email: Option<String>
 }
 
-// Request removing an email with this struct.
-pub struct ReqRemEmail {
-    pub user_id: i32,
-    pub user_email_id: i32
-}
-
-
-// Request to change primary email.
-pub struct ReqPrimEmail {
-    pub user_id: i32,
-    pub user_email_id: i32
-}
 
 pub struct ReqBanUser {
-    pub user_id: i32,
-    pub banned_by: i32,
+    pub user_id: isize,
+    pub banned_by: isize,
     pub ban_reason: String,
-    pub ban_until: NaiveDateTime
+    pub ban_until: Option<NaiveDateTime>
 }
 
-pub struct ReqUnbanUser {
-    pub user_id: i32
+pub struct ReqUserActive {
+    pub user_id: isize,
+    pub active: bool
 }
 
-pub struct ReqDisableUser {
-    pub user_id: i32
-}
-
-pub struct ReqEnableUser {
-    pub user_id: i32
-}
-
-pub struct ReqSetPassword {
-    pub user_id: i32,
+pub struct ReqUsetSetPassword {
+    pub user_id: isize,
     pub new_password: String
 }
 
-pub struct ReqSetStorage {
-    pub user_id: i32,
+// Set to None to delete it.
+pub struct ReqUserStorageSet {
+    pub user_id: isize,
     pub category: String,
     pub storage_name: String,
-    pub json_data: serde_json::Value
+    pub json_data: Option<serde_json::Value>
 }
 
-pub struct ReqDelStorage {
-    pub user_id: i32,
-    pub category: String,
-    pub storage_name: String
-}
 
-pub struct ReqWipeStorage {
-    pub user_id: i32,
+pub struct ReqUserStorageWipe {
+    pub user_id: isize,
     pub category: String
 }
 

@@ -1,71 +1,135 @@
 use tokio::{
     prelude::*,
     sync::mpsc::{Receiver, Sender, channel},
+    sync::oneshot,
 };
 
 use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
+    error::Error
 };
 
-use thermite_protocol::{
-    Msg2ProtocolManager,
-    ProtocolCapabilities,
-    ProtocolLink,
-    Msg2MudProtocol,
+use thermite_protocol::{Msg2ProtocolManager, ProtocolCapabilities, ProtocolLink, Msg2MudProtocol, ConnectResponse};
+
+use regex::{Regex, Captures};
+
+use crate::{
+    db::Msg2DbManager,
+    models::{User, Game, Board, Post, PostRead, Channel, ChannelSub, GameMember, MemberStorage},
+    lobby::Msg2Lobby,
 };
 
-use crate::db::{
-    Msg2DbManager
-};
 
+pub enum Msg2ConnManager {
+
+}
+
+#[derive(Debug)]
 pub struct ProtocolManager {
+    pub tx_prot_manager: Sender<Msg2ProtocolManager>,
+    rx_prot_manager: Receiver<Msg2ProtocolManager>,
+    tx_lobby: Sender<Msg2Lobby>,
+    rx_conn_manager: Receiver<Msg2ConnManager>,
+    pub tx_conn_manager: Sender<Msg2ConnManager>,
     protocols: HashMap<String, ProtocolLink>,
-    pub tx_manager: Sender<Msg2ProtocolManager>,
-    rx_manager: Receiver<Msg2ProtocolManager>,
-    tx_db: Sender<Msg2DbManager>
+    running: bool,
 }
 
 impl ProtocolManager {
-    pub fn new(tx_db: Sender<Msg2DbManager>) -> Self {
-        let (tx_manager, rx_manager) = channel(50);
+    pub fn new(tx_lobby: Sender<Msg2Lobby>) -> Self {
+        let (tx_prot_manager, rx_prot_manager) = channel(50);
+        let (tx_conn_manager, rx_conn_manager) = channel(50);
 
         Self {
-            protocols: Default::default(),
-            tx_manager,
-            rx_manager,
-            tx_db
+            tx_prot_manager,
+            rx_prot_manager,
+            tx_conn_manager,
+            rx_conn_manager,
+            tx_lobby,
+            running: true,
+            protocols: Default::default()
         }
     }
 
     pub async fn run(&mut self) {
-        loop {
-            if let Some(msg) = self.rx_manager.recv().await {
-                println!("Protocol Manager got a message: {:?}", msg);
-                match msg {
-                    Msg2ProtocolManager::NewProtocol(mut link) => {
-                        let welcome = self.welcome_screen(&link);
-                        let mut tx = link.tx_protocol.clone();
-                        self.protocols.insert(link.conn_id.clone(), link);
-                        let _ = tx.send(Msg2MudProtocol::Ready).await;
-                        let _ = tx.send(Msg2MudProtocol::Line(welcome)).await;
-                    },
-                    Msg2ProtocolManager::ProtocolCommand(conn_id, command) => {
-                        println!("GOT COMMAND FROM {}: {}", conn_id, command);
-                        if let Some(link) = self.protocols.get_mut(&conn_id) {
-                            let _ = link.tx_protocol.send(Msg2MudProtocol::Line(format!("ECHO: {}", command))).await;
-                        }
-                    },
-                    Msg2ProtocolManager::ProtocolDisconnected(conn_id) => {
-                        println!("SESSION {} DISCONNECTED!", conn_id);
-                        self.protocols.remove(&conn_id);
+        while self.running {
+            tokio::select! {
+                prot_msg = self.rx_prot_manager.recv() => {
+                    if let Some(msg) = prot_msg {
+                        let _ = self.process_protocol_message(msg).await;
+                    }
+                },
+                conn_msg = self.rx_conn_manager.recv() => {
+                    if let Some(msg) = conn_msg {
+                        let _ = self.process_connection_message(msg).await;
                     }
                 }
             }
         }
     }
 
-    fn welcome_screen(&self, link: &ProtocolLink) -> String {
-        String::from("NOT MUCH TO SEE YET!")
+    async fn process_connection_message(&mut self, msg: Msg2ConnManager) {
+
+    }
+
+    async fn process_protocol_message(&mut self, msg: Msg2ProtocolManager) {
+        println!("Protocol Manager got a message: {:?}", msg);
+        match msg {
+            Msg2ProtocolManager::NewProtocol(mut link, sender) => {
+                let _ = self.accept_protocol(link, sender).await;
+            },
+            Msg2ProtocolManager::ProtocolCommand(conn_id, command) => {
+                let _ = self.execute_command(conn_id, command).await;
+            },
+            Msg2ProtocolManager::ProtocolDisconnected(conn_id) => {
+                println!("SESSION {} DISCONNECTED!", conn_id);
+                self.protocols.remove(&conn_id);
+                let _ = self.tx_lobby.send(Msg2Lobby:ProtocolDisconnected(conn_id)).await;
+            }
+        }
+    }
+
+    async fn accept_protocol(&mut self, link: ProtocolLink, sender: oneshot::Sender<ConnectResponse>) {
+        // Intercept the sender oneshot and create a new one. We'll be standing in for the Lobby here.
+        let (mut tx_response, mut rx_response) = oneshot::channel::<ConnectResponse>();
+        let _ = self.tx_lobby.send(Msg2Lobby::NewProtocol(link.clone(), tx_response)).await;
+
+        match rx_response.await {
+            Ok(answer) => {
+                match &answer {
+                    ConnectResponse::Ok => {
+                        // The lobby has accepted this connection. We'll add it to our tracking.
+                        self.protocols.insert(link.conn_id.clone(), link);
+                    },
+                    ConnectResponse::Error(reason) => {
+                        // the lobby has rejected this connection. This protocol will not be accepted.
+                        // The answer is passed on to the protocol, which will disconnect.
+                    }
+                }
+                let _ = sender.send(answer).await;
+            },
+            Err(e) => {
+
+            }
+        }
+    }
+
+    async fn execute_command(&mut self, conn_id: String, command: String) {
+        println!("GOT COMMAND FROM {}: {}", conn_id, command);
+
+        // letting the above stand for debugging/reference right now.
+        if self.state.protocols.contains_key(&conn_id) {
+            let prot = self.state.protocols.get().unwrap().clone();
+            if command.starts_with("-") || command.starts_with(".") {
+                // Commands that begin with - or . are Thermite commands. Route them to the lobby.
+                let _ = self.tx_lobby.send(Msg2Lobby::ProtocolCommand(conn_id, command)).await;
+            } else {
+                // Other commands are routed to a game, if it's connected...
+            }
+        } else {
+            // This is what happens if we somehow get a command but there's no protocol registered...
+            // I'm not sure what that should be, TBH.
+        }
     }
 }

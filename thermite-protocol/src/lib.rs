@@ -1,5 +1,8 @@
 use serde_json::Value as JsonValue;
-use tokio::sync::mpsc::{Sender};
+use tokio::sync::{
+    mpsc::{Sender};
+    oneshot,
+}
 use std::net::SocketAddr;
 
 pub mod telnet;
@@ -17,9 +20,14 @@ pub enum Msg2MudProtocol {
     Ready
 }
 
+pub enum ConnectResponse {
+    Ok,
+    Error(String)
+}
+
 #[derive(Debug)]
 pub enum Msg2ProtocolManager {
-    NewProtocol(ProtocolLink),
+    NewProtocol(ProtocolLink, oneshot::Sender<ConnectResponse>),
     ProtocolCommand(String, String),
     ProtocolDisconnected(String),
 }
