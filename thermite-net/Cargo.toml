@@ -11,3 +11,4 @@ tokio = {version = "0.2", features = ["tcp", "dns", "sync", "macros"]}
 tokio-rustls = "0.14"
 futures = "0.3"
 futures-core = "0.3"
+async-trait = "0.1"

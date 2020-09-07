@@ -10,12 +10,9 @@ use std::{
     error::Error
 };
 
-use crate::{Msg2ProtocolManager, ProtocolCapabilities, ProtocolLink, Msg2MudProtocol, ConnectResponse};
+use crate::{Msg2ProtocolManager, ProtocolCapabilities, ProtocolLink, Msg2Game, 
+    Msg2MudProtocol, ConnectResponse, MudProtocolFilter};
 
-
-pub enum Msg2Game {
-
-}
 
 #[derive(Debug)]
 pub struct ProtocolManager {
@@ -47,10 +44,6 @@ impl ProtocolManager {
                         let _ = self.process_protocol_message(msg).await;
                     }
                 },
-                conn_msg = self.rx_conn_manager.recv() => {
-                    if let Some(msg) = conn_msg {
-                        let _ = self.process_connection_message(msg).await;
-                    }
                 }
             }
         }
@@ -72,7 +65,7 @@ impl ProtocolManager {
             Msg2ProtocolManager::ProtocolDisconnected(conn_id) => {
                 println!("SESSION {} DISCONNECTED!", conn_id);
                 self.protocols.remove(&conn_id);
-                let _ = self.tx_lobby.send(Msg2Lobby:ProtocolDisconnected(conn_id)).await;
+                let _ = self.tx_game.send(Msg2Game:ProtocolDisconnected(conn_id)).await;
             }
         }
     }
@@ -110,7 +103,7 @@ impl ProtocolManager {
             let prot = self.state.protocols.get().unwrap().clone();
             if command.starts_with("-") || command.starts_with(".") {
                 // Commands that begin with - or . are Thermite commands. Route them to the lobby.
-                let _ = self.tx_lobby.send(Msg2Lobby::ProtocolCommand(conn_id, command)).await;
+                let _ = self.tx_game.send(Msg2Game::ProtocolCommand(conn_id, command)).await;
             } else {
                 // Other commands are routed to a game, if it's connected...
             }

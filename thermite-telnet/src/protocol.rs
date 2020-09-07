@@ -253,6 +253,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                     TelnetEvent::TTYPE(text) => self.receive_ttype(text).await,
                     TelnetEvent::Command(byte) => {},
                     TelnetEvent::GMCP(command, json) => {},
+                    TelnetEvent::MSSP => {}
                     _ => {}
                 }
             },

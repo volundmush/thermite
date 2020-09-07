@@ -14,6 +14,12 @@ use tokio_rustls::{
     server::TlsStream
 };
 
+// Feed one of these to the Portal to implement a connection filter.
+#[async_trait::async_trait]
+pub trait PortalFilter {
+    async fn check(&mut self, addr: &SocketAddr) -> bool;
+}
+
 pub enum Msg2Listener {
     Kill
 }
@@ -135,13 +141,14 @@ pub struct Portal {
 
 impl Portal {
 
-    pub fn new() -> Self {
+    pub fn new(filter: Option<Box<dyn PortalFilter>>) -> Self {
 
         let (tx_portal, rx_portal) = channel(50);
 
         Self {
             listeners: Default::default(),
             factories: Default::default(),
+            filter,
             tx_portal,
             rx_portal
         }

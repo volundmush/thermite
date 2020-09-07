@@ -1422,6 +1422,7 @@ dependencies = [
 name = "thermite-net"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "futures",
  "futures-core",
  "tokio",
