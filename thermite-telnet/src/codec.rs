@@ -77,6 +77,97 @@ pub enum TelnetEvent {
     IncomingCompression(bool)
 }
 
+impl From<TelnetEvent> for Bytes {
+    fn from(src: TelnetEvent) -> Self {
+        let mut out = BytesMut::new();
+
+        match src {
+            TelnetEvent::Data(data) => {
+                out.reserve(data.len());
+                out.put(data);
+            },
+            TelnetEvent::Line(mut data) => {
+                if !data.ends_with("\r\n") {
+                    data.push_str("\r\n");
+                }
+                out.reserve(data.len());
+                out.put(data.as_bytes());
+            },
+            TelnetEvent::Prompt(data) => {
+                // Not sure what to do about prompts yet.
+            },
+            TelnetEvent::Negotiate(comm, op) => {
+                out.reserve(3);
+                out.put_u8(codes::IAC);
+                out.put_u8(comm);
+                out.put_u8(op);
+            },
+            TelnetEvent::SubNegotiate(op, data) => {
+                out.reserve(5 + data.len());
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SB);
+                out.put_u8(op);
+                out.put(data);
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SE);
+            },
+            TelnetEvent::NAWS(width, height) => {
+                out.reserve(9);
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SB);
+                out.put(width.to_be_bytes().as_ref());
+                out.put(height.to_be_bytes().as_ref());
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SE);
+            },
+            TelnetEvent::TTYPE(data) => {
+                out.reserve(data.len() + 6);
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SB);
+                out.put_u8(codes::TTYPE);
+                out.put_u8(0);
+                out.put(data.as_bytes());
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SE);
+            },
+            TelnetEvent::Command(byte) => {
+                out.reserve(2);
+                out.put_u8(codes::IAC);
+                out.put_u8(byte);
+            },
+            TelnetEvent::GMCP(comm, data) => {
+                let outjson = data.to_string();
+                out.reserve(6 + comm.len() + outjson.len());
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SB);
+                out.put_u8(codes::GMCP);
+                out.put(comm.as_bytes());
+                out.put_u8(32);
+                out.put(outjson.as_bytes());
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SE);
+            },
+            TelnetEvent::MSSP(vals) => {
+                out.reserve(5);
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SB);
+                out.put_u8(codes::MSSP);
+                for (k, v) in vals.iter() {
+                    out.reserve(k.len() + v.len() + 2);
+                    out.put_u8(1);
+                    out.put(k.as_bytes());
+                    out.put_u8(2);
+                    out.put(v.as_bytes());
+                }
+                out.put_u8(codes::IAC);
+                out.put_u8(codes::SE);
+            },
+            _ => {}
+        }
+        out.freeze()
+    }
+}
+
 enum IacSection {
     Negotiate(u8, u8),
     IAC,
@@ -329,6 +420,24 @@ impl Decoder for TelnetCodec {
                                     codes::MSSP => {
                                         // We must de-serialize Mud Server Status Protocol into a HashMap<String, String>.
                                         // #TODO: Above.
+                                    },
+                                    codes::MCCP3 => {
+                                        match self.conn_type {
+                                            TelnetConnectionType::Server => {
+                                                let _ = self.enable_incoming_compression();
+                                                answer = Ok(Some(TelnetEvent::SubNegotiate(op, self.sub_data.clone().freeze())))
+                                            },
+                                            _ => {}
+                                        }
+                                    },
+                                    codes::MCCP2 => {
+                                        match self.conn_type {
+                                            TelnetConnectionType::Client => {
+                                                let _ = self.enable_incoming_compression();
+                                                answer = Ok(Some(TelnetEvent::SubNegotiate(op, self.sub_data.clone().freeze())))
+                                            },
+                                            _ => {}
+                                        }
                                     }
                                     // This is either unrecognized or app-specific. We will pass it up to the application to handle.
                                     _ => answer = Ok(Some(TelnetEvent::SubNegotiate(op, self.sub_data.clone().freeze())))
@@ -443,118 +552,16 @@ impl Encoder<TelnetEvent> for TelnetCodec {
 
     fn encode(&mut self, item: TelnetEvent, dst: &mut BytesMut) -> Result<(), Self::Error> {
         println!("Sending TelnetEvent: {:?}", item);
-        match item {
-            TelnetEvent::Data(data) => {
-                self.out_data.reserve(data.len());
-                self.out_data.put(data);
-            },
-            TelnetEvent::Line(mut data) => {
-                if !data.ends_with("\r\n") {
-                    data.push_str("\r\n");
-                }
-                self.out_data.reserve(data.len());
-                self.out_data.put(data.as_bytes());
-            },
-            TelnetEvent::Prompt(data) => {
-                // Not sure what to do about prompts yet.
-            },
-            TelnetEvent::Negotiate(comm, op) => {
-                self.out_data.reserve(3);
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(comm);
-                self.out_data.put_u8(op);
-            },
-            TelnetEvent::SubNegotiate(op, data) => {
-                self.out_data.reserve(5 + data.len());
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SB);
-                self.out_data.put_u8(op);
-                self.out_data.put(data);
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SE);
-            },
-            TelnetEvent::NAWS(width, height) => {
-                self.out_data.reserve(9);
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SB);
-                self.out_data.put(width.to_be_bytes().as_ref());
-                self.out_data.put(height.to_be_bytes().as_ref());
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SE);
-            },
-            TelnetEvent::TTYPE(data) => {
-                self.out_data.reserve(data.len() + 6);
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SB);
-                self.out_data.put_u8(codes::TTYPE);
-                self.out_data.put_u8(0);
-                self.out_data.put(data.as_bytes());
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SE);
-            },
-            TelnetEvent::Command(byte) => {
-                self.out_data.reserve(2);
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(byte);
-            },
-            TelnetEvent::GMCP(comm, data) => {
-                let outjson = data.to_string();
-                self.out_data.reserve(6 + comm.len() + outjson.len());
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SB);
-                self.out_data.put_u8(codes::GMCP);
-                self.out_data.put(comm.as_bytes());
-                self.out_data.put_u8(32);
-                self.out_data.put(outjson.as_bytes());
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SE);
-            },
-            TelnetEvent::MSSP(vals) => {
-                self.out_data.reserve(5);
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SB);
-                self.out_data.put_u8(codes::MSSP);
-                for (k, v) in vals.iter() {
-                    self.out_data.reserve(k.len() + v.len() + 2);
-                    self.out_data.put_u8(1);
-                    self.out_data.put(k.as_bytes());
-                    self.out_data.put_u8(2);
-                    self.out_data.put(v.as_bytes());
-                }
-                self.out_data.put_u8(codes::IAC);
-                self.out_data.put_u8(codes::SE);
-            }
-            TelnetEvent::IncomingCompression(op) => {
-                if op && !self.in_compress {
-                    // We are enabling outgoing compression. set toggles and compress any buffered
-                    // bytes in self.in_data
-                    if let Err(e) = self.enable_incoming_compression() {
-                        return Err(e);
-                    }
-                } else {
-                    if self.in_compress {
-                        self.in_compress = false;
-                    }
-                }
-            },
-            TelnetEvent::OutgoingCompression(op) => {
-                if op {
-                    if !self.out_compress {
-                        self.out_compress = true;
-                        if let Err(e) = self.zipper.reset(Vec::new()) {
-                            return Err(e);
-                        }
-                    }
-                } else {
-                    if self.out_compress {
-                        self.out_compress = false;
-                    }
-                }
-            }
+        
+        if let TelnetEvent::OutgoingCompression(val) = &item {
+            self.out_compress = *val;
+            return Ok(());
         }
+        
+        let out = Bytes::from(item);
 
         if self.out_compress {
-            match self.zipper.write_all(self.out_data.as_ref()) {
+            match self.zipper.write_all(out.as_ref()) {
                 Ok(()) => {
                     if let Ok(_) = self.zipper.flush() {
                         let zbuf = self.zipper.get_mut();
@@ -569,10 +576,10 @@ impl Encoder<TelnetEvent> for TelnetCodec {
                 }
             }
         } else {
-            dst.reserve(self.out_data.len());
-            dst.put(self.out_data.as_ref());
+            dst.reserve(out.len());
+            dst.put(out.as_ref());
         }
-        self.out_data.clear();
+
         Ok(())
     }
 }

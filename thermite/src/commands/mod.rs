@@ -1,6 +1,7 @@
 pub mod bbs;
 pub mod chan;
 pub mod game;
+pub mod login;
 pub mod system;
 pub mod user;
 
@@ -21,15 +22,15 @@ pub enum HelpCategory {
 #[derive(Clone, Debug)]
 pub struct Command {
     pub name: String,
-    pub help_text: String,
-    pub help_category: HelpCategory,
+    pub help_text: Option<String>,
+    pub help_category: Option<HelpCategory>,
     pub admin_level: u8,
     pub login_command: bool,
     pub action: fn(&String, &String, &HashMap<String, String>, &mut ProgramState) -> Box<dyn Future<Output = Result<(), Box<dyn Error>>>>
 }
 
 impl Command {
-    fn new(name: String, help_text: String, help_category: HelpCategory, admin_level: u8, login_command: bool,
+    fn new(name: String, help_text: Option<String>, help_category: Option<HelpCategory>, admin_level: u8, login_command: bool,
            action: fn(&String, &String, &HashMap<String, String>, &mut ProgramState) -> Box<dyn Future<Output = Result<(), Box<dyn Error>>>>) -> Self {
         Self {
             name,
@@ -39,5 +40,9 @@ impl Command {
             login_command,
             action
         }
+    }
+
+    pub async fn display_help(&self, conn_id: &String, state: &mut ProgramState) {
+        
     }
 }

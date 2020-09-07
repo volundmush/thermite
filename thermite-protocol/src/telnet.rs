@@ -437,7 +437,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             },
             tc::MCCP2 => {
                 // Upon getting the OK from the client to use MCCP2, IMMEDIATELY enable the compression.
-                // The codec will handle this.
+                
                 let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MCCP2, BytesMut::with_capacity(0).freeze())).await;
                 let _ = self.conn.send(TelnetEvent::OutgoingCompression(true)).await;
             }

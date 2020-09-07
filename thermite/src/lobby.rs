@@ -199,13 +199,14 @@ impl Lobby {
                     }
                 }
 
-                let whole = captures.get("wholecmd").unwrap().clone();
+                let whole = captures.get("wholecmd").unwrap().clone().to_lowercase();
 
                 if whole.starts_with("-") {
                     // This is for normal commands.
 
                     if let Some(comm) = self.state.commands.get(&whole) {
                         let use_command = comm.clone();
+                        let result = use_command.action.execute(&conn_id, &command, &captures, &mut self.state).await;
                     }
 
 
