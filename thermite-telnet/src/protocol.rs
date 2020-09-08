@@ -25,31 +25,34 @@ use futures::{
 use serde_json::Value as JsonValue;
 
 
-use crate::{TelnetCodec, codes as tc, TelnetEvent, TelnetConnectionMode, TelnetConnectionType};
+use crate::{
+    codec::{TelnetCodec, TelnetEvent, TelnetConnectionMode, TelnetConnectionType},
+    codes as tc,
+};
 
 
 #[derive(Default, Clone)]
-struct TelnetOptionPerspective {
+pub struct TelnetOptionPerspective {
     pub enabled: bool,
     // Negotiating is true if WE have sent a request.
     pub negotiating: bool
 }
 
 #[derive(Default, Clone)]
-struct TelnetOptionState {
+pub struct TelnetOptionState {
     pub remote: TelnetOptionPerspective,
     pub local: TelnetOptionPerspective,
 }
 
 #[derive(Default, Clone)]
-struct TelnetOption {
+pub struct TelnetOption {
     pub allow_local: bool,
     pub allow_remote: bool,
     pub start_local: bool,
     pub start_remote: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TelnetConfig {
     pub client_name: String,
     pub client_version: String,
@@ -112,20 +115,23 @@ impl Default for TelnetConfig {
     }
 }
 
+#[derive(Debug)]
 pub enum Msg2MudTelnetProtocol {
     Config(TelnetConfig),
     Line(String),
-    Data(String, serde_json::Value),
+    GMCP(String, serde_json::Value),
     Ready(TelnetConfig),
-    ClientDisconnected
+    ClientDisconnected,
+    MSSP
 }
 
+#[derive(Debug)]
 pub enum Msg2TelnetProtocol {
     Line(String),
     Prompt(String),
-    Data(String, serde_json::Value),
-    SubNegotiate(u8, Bytes),
+    GMCP(String, serde_json::Value),
     Disconnect,
+    ServerStatus(HashMap<String, String>),
     GetReady
 }
 
@@ -145,8 +151,8 @@ pub struct TelnetProtocol<T> {
     active: bool,
     sent_link: bool,
     tx_mud: Sender<Msg2MudTelnetProtocol>,
-    tx_protocol: Sender<Msg2TelnetProtocol>,
-    rx_protocol: Receiver<Msg2TelnetProtocol>,
+    tx_telnet: Sender<Msg2TelnetProtocol>,
+    rx_telnet: Receiver<Msg2TelnetProtocol>,
     running: bool
 }
 
@@ -210,10 +216,10 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         
         // Just packing all of this together so it gets sent at once.
         let _ = self.conn.send(TelnetEvent::Data(opening)).await;
-        let mut send_chan = self.tx_protocol.clone();
+        let mut send_chan = self.tx_telnet.clone();
 
         // Ready a message to fire off quickly for in case
-        let ready_task = tokio::spawn(async move {
+        let _ready_task = tokio::spawn(async move {
             time::delay_for(Duration::from_millis(500)).await;
             let _ = send_chan.send(Msg2TelnetProtocol::GetReady).await;
             ()
@@ -223,13 +229,20 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             tokio::select! {
                 t_msg = self.conn.next() => {
                     if let Some(msg) = t_msg {
-                        let _ = self.process_telnet_event(msg).await;
+                        match msg {
+                            Ok(msg) => {
+                                let _ = self.process_telnet_event(msg).await;
+                            },
+                            Err(e) => {
+                                // Not sure what to do about this yet.
+                            }
+                        }
                     } else {
-                        let _ = self.tx_mud.send(Msg2MudTelnetProtocol::).await;
-                        break;
+                        let _ = self.tx_mud.send(Msg2MudTelnetProtocol::ClientDisconnected).await;
+                        self.running = false;
                     }
                 },
-                p_msg = self.rx_protocol.recv() => {
+                p_msg = self.rx_telnet.recv() => {
                     if let Some(msg) = p_msg {
                         println!("Got Protocol Message: {:?}", msg);
                         let _ = self.process_protocol_message(msg).await;
@@ -241,51 +254,38 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
 
     async fn process_telnet_event(&mut self, msg: TelnetEvent) {
         match msg {
-            Ok(msg) => {
-                println!("Got Telnet Event! {:?}", msg);
-                match msg {
-                    TelnetEvent::Line(text) => {
-                        let _ = self.tx_mud.send(Msg2MudTelnetProtocol::Line(text)).await;
-                    },
-                    TelnetEvent::SubNegotiate(op, data) => self.receive_sub(op, data).await,
-                    TelnetEvent::Negotiate(comm, op) => self.receive_negotiate(comm, op).await,
-                    TelnetEvent::NAWS(width, height) => self.receive_naws(width, height).await,
-                    TelnetEvent::TTYPE(text) => self.receive_ttype(text).await,
-                    TelnetEvent::Command(byte) => {},
-                    TelnetEvent::GMCP(command, json) => {},
-                    TelnetEvent::MSSP => {}
-                    _ => {}
-                }
+            TelnetEvent::Line(text) => {
+                let _ = self.tx_mud.send(Msg2MudTelnetProtocol::Line(text)).await;
             },
-            Err(e) => {
-                println!("GOT ERROR: {:?}", e);
-                let _ = self.tx_mud.send(Msg2MudTelnetProtocol::ClientDisconnected).await;
-                self.running = false;
-            }
+            TelnetEvent::SubNegotiate(op, data) => self.receive_sub(op, data).await,
+            TelnetEvent::Negotiate(comm, op) => self.receive_negotiate(comm, op).await,
+            TelnetEvent::NAWS(width, height) => self.receive_naws(width, height).await,
+            TelnetEvent::TTYPE(text) => self.receive_ttype(text).await,
+            TelnetEvent::Command(byte) => {},
+            TelnetEvent::GMCP(command, json) => {
+                let _ = self.tx_mud.send(Msg2MudTelnetProtocol::GMCP(command, json)).await;
+            },
+            _ => {}
         }
-        ()
     }
 
     async fn process_protocol_message(&mut self, msg: Msg2TelnetProtocol) {
         match msg {
             Msg2TelnetProtocol::Disconnect => {
-                break;
+                self.running = false;
             },
             Msg2TelnetProtocol::Line(text) => {
                 let _ = self.conn.send(TelnetEvent::Line(text)).await;
             },
             Msg2TelnetProtocol::Prompt(text) => {
-
+                let _ = self.conn.send(TelnetEvent::Prompt(text)).await;
             },
-            Msg2TelnetProtocol::Data(String, JsonValue) => {
-                let _ = self.conn.send(TelnetEvent::GMCP(String, JsonValue)).await;
+            Msg2TelnetProtocol::GMCP(cmd, data) => {
+                let _ = self.conn.send(TelnetEvent::GMCP(cmd, data)).await;
             },
-            Msg2TelnetProtocol::MSSP => {
-
+            Msg2TelnetProtocol::ServerStatus(data) => {
+                let _ = self.conn.send(TelnetEvent::MSSP(data)).await;
             },
-            Msg2TelnetProtocol::Ready => {
-                self.active = true;
-            }
             Msg2TelnetProtocol::GetReady => {
                 let _ = self.get_ready().await;
             }

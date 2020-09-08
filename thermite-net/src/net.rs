@@ -136,7 +136,8 @@ pub struct Portal {
     listeners: HashMap<String, ListenerLink>,
     factories: HashMap<String, FactoryLink>,
     pub tx_portal: Sender<Msg2Portal>,
-    rx_portal: Receiver<Msg2Portal>
+    rx_portal: Receiver<Msg2Portal>,
+    filter: Option<Box<dyn PortalFilter>>
 }
 
 impl Portal {

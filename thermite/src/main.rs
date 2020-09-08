@@ -31,12 +31,15 @@ use tokio_rustls::{
 };
 
 use thermite_net::{Portal, Msg2Portal};
-use thermite_telnet::{codes as tc};
+use thermite_telnet::{
+    codes as tc,
+    protocol::TelnetOption,
+};
 
 use thermite::{
     config::{Config, ServerConfig as ThermiteServer},
     db::DbManager,
-    protocol::ProtocolManager
+    lobby::Lobby
 };
 use thermite_protocol::{
     telnet::{TelnetOption,TelnetProtocolFactory}
@@ -75,7 +78,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Setup Sqlite3 via Diesel and Tokio-Diesel
     let database_url = conf.database.get("sqlite3").expect("No database configured for 'sqlite3'!");
-    let mut db = DbManager::new(database_url).expect("Could not start Database connection pool.");
+    let mut db = DbManager::new(database_url.clone()).expect("Could not start Database connection pool.");
     let tx_dbmanager = db.tx_dbmanager.clone();
 
     let db_task = tokio::spawn(async move {db.run().await});
@@ -84,7 +87,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tx_manager = prot_manager.tx_manager.clone();
     let prot_task = tokio::spawn(async move {prot_manager.run().await});
 
-    let mut portal = Portal::new();
+    let mut portal = Portal::new(None);
 
     let mut telnet_factory = TelnetProtocolFactory::new("telnet".parse().unwrap(), teloptions(), tx_manager.clone());
     portal.register_factory(telnet_factory.link());

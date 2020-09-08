@@ -2,49 +2,43 @@ use serde_json::Value as JsonValue;
 use tokio::sync::{
     mpsc::{Sender},
     oneshot,
-}
-use std::net::SocketAddr;
+};
+use std::{
+    net::SocketAddr,
+    collections::HashMap,
+};
 
 pub mod telnet;
-pub mod websocket;
-pub mod manager;
+//pub mod websocket;
 
 #[derive(Debug)]
 pub enum Msg2MudProtocol {
     Disconnect,
     Line(String),
     Prompt(String),
-    Data(String, JsonValue),
+    GMCP(String, JsonValue),
     // When a game requests a Mud Server Status Protocol message,
-    MSSP,
-    GetReady,
-    Ready
+    ServerStatus(HashMap<String, String>)
 }
 
+#[derive(Debug)]
 pub enum ConnectResponse {
     Ok,
     Error(String)
 }
 
 #[derive(Debug)]
-pub enum Msg2ProtocolManager {
+pub enum Msg2Game {
     NewProtocol(ProtocolLink, oneshot::Sender<ConnectResponse>),
     ProtocolCommand(String, String),
-    ProtocolData(String, String, serde_json::JsonValue),
+    ProtocolGMCP(String, String, serde_json::Value),
     ProtocolDisconnected(String),
     UpdateCapabilities(String, ProtocolCapabilities),
     GameKick(String),
+    MSSP(oneshot::Sender<HashMap<String, String>>),
 }
 
-pub enum Msg2Game {
-    NewProtocol(ProtocolLink),
-    ProtocolCommand(String, String),
-    ProtocolData(String, String, serde_json::JsonValue),
-    ProtocolDisconnected(String),
-    UpdateCapabilities(String, ProtocolCapabilities)
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProtocolCapabilities {
     pub client_name: String,
     pub client_version: String,
@@ -61,7 +55,7 @@ pub struct ProtocolCapabilities {
 }
 
 // This is received by whatever handles connections once they are ready to join the game.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProtocolLink {
     pub conn_id: String,
     pub addr: SocketAddr,
@@ -69,5 +63,3 @@ pub struct ProtocolLink {
     pub capabilities: ProtocolCapabilities,
     pub tx_protocol: Sender<Msg2MudProtocol>
 }
-
-

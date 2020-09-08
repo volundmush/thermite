@@ -1453,6 +1453,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "flate2",
+ "futures",
  "serde",
  "serde_derive",
  "serde_json",

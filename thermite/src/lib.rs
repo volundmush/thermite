@@ -7,6 +7,5 @@ pub mod config;
 pub mod db;
 pub mod schema;
 pub mod models;
-pub mod protocol;
 pub mod lobby;
 pub mod commands;

@@ -10,6 +10,7 @@ use std::{
 use tokio::{
     prelude::*,
     sync::mpsc::{Receiver, Sender, channel},
+    sync::oneshot,
     time
 };
 
@@ -28,18 +29,17 @@ use thermite_net::{Msg2Factory, FactoryLink};
 
 use thermite_telnet::{
     codes as tc,
-    codec::TelnetCodec,
+    codec::{TelnetCodec, TelnetConnectionMode, TelnetConnectionType},
     protocol::{
-        Msg2MudTelnetProtocol, Msg2TelnetProtocol, TelnetConfig, TelnetProtocol
+        Msg2MudTelnetProtocol, Msg2TelnetProtocol, TelnetConfig, TelnetProtocol, TelnetOption, TelnetOptionState
     }
 };
 use thermite_util::text::generate_id;
 
-use crate::{Msg2ProtocolManager, Msg2MudProtocol, ProtocolLink,
-            ProtocolCapabilities};
+use crate::{Msg2Game, Msg2MudProtocol, ProtocolLink, ProtocolCapabilities, ConnectResponse};
 
 impl From<TelnetConfig> for ProtocolCapabilities {
-    fn from(src: ProtocolCapabilities) -> Self {
+    fn from(src: TelnetConfig) -> Self {
         ProtocolCapabilities {
             client_name: src.client_name,
             client_version: src.client_version,
@@ -53,9 +53,9 @@ impl From<TelnetConfig> for ProtocolCapabilities {
             width: src.width,
             height: src.height,
             screen_reader: src.screen_reader
+        }
     }
 }
-
 
 pub struct MudTelnetProtocol {
     // This serves as a higher-level actor that abstracts a bunch of the lower-level
@@ -71,13 +71,13 @@ pub struct MudTelnetProtocol {
     pub tx_mud: Sender<Msg2MudTelnetProtocol>,
     rx_mud: Receiver<Msg2MudTelnetProtocol>,
     tx_telnet: Sender<Msg2TelnetProtocol>,
-    tx_manager: Sender<Msg2ProtocolManager>,
+    tx_game: Sender<Msg2Game>,
     running: bool
 }
 
 
 impl MudTelnetProtocol {
-    pub fn new(conn_id: String, addr: SocketAddr, tls: bool, tx_manager: Sender<Msg2ProtocolManager>, 
+    pub fn new(conn_id: String, addr: SocketAddr, tls: bool, tx_game: Sender<Msg2Game>, 
         tx_telnet: Sender<Msg2TelnetProtocol>, tx_mud: Sender<Msg2MudTelnetProtocol>, rx_mud: Receiver<Msg2MudTelnetProtocol>) -> Self {
 
         let (tx_protocol, rx_protocol) = channel(50);
@@ -87,10 +87,9 @@ impl MudTelnetProtocol {
             addr,
             tls,
             config: TelnetConfig::default(),
-            handshakes_left,
             tx_protocol,
             rx_protocol,
-            tx_manager,
+            tx_game,
             active: false,
             sent_link: false,
             tx_telnet,
@@ -110,24 +109,6 @@ impl MudTelnetProtocol {
         }
     }
 
-    async fn check_ready(&mut self) {
-        if self.active || self.sent_link {
-            return;
-        }
-        if self.handshakes_left.len() == 0 && !self.ttype_pending {
-            let _ = self.tx_manager.send(Msg2ProtocolManager::NewProtocol(self.link())).await;
-            self.sent_link = true;
-        }
-    }
-
-    async fn get_ready(&mut self) {
-        if self.active || self.sent_link {
-            return;
-        }
-        let _ = self.tx_manager.send(Msg2ProtocolManager::NewProtocol(self.link())).await;
-        self.sent_link = true;
-    }
-
     pub async fn run(&mut self) {
 
         while self.running {
@@ -138,39 +119,36 @@ impl MudTelnetProtocol {
                         
                     } else {
                         if self.sent_link {
-                                    let _ = self.tx_manager.send(Msg2ProtocolManager::ProtocolDisconnected(self.conn_id.clone())).await;
+                                    let _ = self.tx_game.send(Msg2Game::ProtocolDisconnected(self.conn_id.clone())).await;
                                 }
                         break;
                     }
                 },
                 p_msg = self.rx_protocol.recv() => {
                     if let Some(msg) = p_msg {
-                        println!("Got Protocol Message: {:?}", msg);
-                        match msg {
-                            Msg2MudProtocol::Disconnect => {
-                                break;
-                            },
-                            Msg2MudProtocol::Line(text) => {
-                                let _ = self.conn.send(TelnetEvent::Line(text)).await;
-                            },
-                            Msg2MudProtocol::Prompt(text) => {
-
-                            },
-                            Msg2MudProtocol::OOB(String, JsonValue) => {
-
-                            },
-                            Msg2MudProtocol::MSSP => {
-
-                            },
-                            Msg2MudProtocol::Ready => {
-                                self.active = true;
-                            }
-                            Msg2MudProtocol::GetReady => {
-                                let _ = self.get_ready().await;
-                            }
-                        }
+                        let _ = self.process_mudprotocol_message(msg).await;
                     }
                 }
+            }
+        }
+    }
+
+    async fn process_mudprotocol_message(&mut self, msg: Msg2MudProtocol) {
+        match msg {
+            Msg2MudProtocol::Disconnect => {
+                self.running = false;
+            },
+            Msg2MudProtocol::Line(text) => {
+                let _ = self.tx_telnet.send(Msg2TelnetProtocol::Line(text)).await;
+            },
+            Msg2MudProtocol::Prompt(text) => {
+                let _ = self.tx_telnet.send(Msg2TelnetProtocol::Prompt(text)).await;
+            },
+            Msg2MudProtocol::GMCP(cmd, data) => {
+                let _ = self.tx_telnet.send(Msg2TelnetProtocol::GMCP(cmd, data)).await;
+            },
+            Msg2MudProtocol::ServerStatus(data) => {
+                let _ = self.tx_telnet.send(Msg2TelnetProtocol::ServerStatus(data)).await;
             }
         }
     }
@@ -179,9 +157,53 @@ impl MudTelnetProtocol {
         match msg {
             Msg2MudTelnetProtocol::Line(text) => self.receive_line(text).await,
             Msg2MudTelnetProtocol::Config(config) => self.receive_config(config).await,
-            Msg2MudTelnetProtocol::Data(command, json) => self.receive_data(command, data).await,
-            Msg2MudTelnetProtocol::Ready(config) => {},
-            Msg2MudTelnetProtocol::ClientDisconnected => {}            
+            Msg2MudTelnetProtocol::GMCP(command, json) => {
+                if self.active {
+                    let _ = self.tx_game.send(Msg2Game::ProtocolGMCP(self.conn_id.clone(), command, json)).await;
+                }
+            },
+            Msg2MudTelnetProtocol::Ready(config) => {
+                let _ = self.activate(config).await;
+            },
+            Msg2MudTelnetProtocol::ClientDisconnected => {},
+            Msg2MudTelnetProtocol::MSSP => self.handle_mssp().await,
+        }
+    }
+
+    async fn activate(&mut self, config: TelnetConfig) {
+        self.config = config;
+        if !self.active {
+            let (tx_resp, rx_resp) = oneshot::channel::<ConnectResponse>();
+            let _ = self.tx_game.send(Msg2Game::NewProtocol(self.link(), tx_resp)).await;
+            if let Ok(resp) = rx_resp.await {
+                match resp {
+                    ConnectResponse::Ok => {
+                        self.active = true;
+                    },
+                    ConnectResponse::Error(e) => {
+                        self.running = false;
+                        self.tx_telnet.send(Msg2TelnetProtocol::Line(e)).await;
+                        self.tx_telnet.send(Msg2TelnetProtocol::Disconnect).await;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn receive_config(&mut self, config: TelnetConfig) {
+        self.config = config;
+        if self.active {
+            let _ = self.tx_game.send(Msg2Game::UpdateCapabilities(self.conn_id.clone(), ProtocolCapabilities::from(self.config.clone()))).await;
+        }
+    }
+
+    async fn handle_mssp(&mut self) {
+        // Send MSSP request. Since we cannot be sure we are linked to the Game yet, use a oneshot
+        // channel so this will never fail.
+        let (tx_mssp, rx_mssp) = oneshot::channel::<HashMap<String, String>>();
+        let _ = self.tx_game.send(Msg2Game::MSSP(tx_mssp)).await;
+        if let Ok(resp) = rx_mssp.await {
+            let _ = self.tx_telnet.send(Msg2TelnetProtocol::ServerStatus(resp)).await;
         }
     }
 
@@ -189,7 +211,7 @@ impl MudTelnetProtocol {
         // No commands will be sent until the Protocol has been recognized by the ProtocolManager.
         println!("RECEIVED LINE: {}", text);
         if self.active {
-            let _ = self.tx_manager.send(Msg2ProtocolManager::ProtocolCommand(self.conn_id.clone(), text)).await;
+            let _ = self.tx_game.send(Msg2Game::ProtocolCommand(self.conn_id.clone(), text)).await;
         } else {
             println!("But we're not active.");
         }
@@ -203,12 +225,12 @@ pub struct TelnetProtocolFactory {
     telnet_options: Arc<HashMap<u8, TelnetOption>>,
     telnet_statedef: HashMap<u8, TelnetOptionState>,
     opening_bytes: Bytes,
-    tx_manager: Sender<Msg2ProtocolManager>,
+    tx_manager: Sender<Msg2Game>,
     ids: HashSet<String>,
 }
 
 impl TelnetProtocolFactory {
-    pub fn new(factory_id: String, options: HashMap<u8, TelnetOption>, tx_manager: Sender<Msg2ProtocolManager>) -> Self {
+    pub fn new(factory_id: String, options: HashMap<u8, TelnetOption>, tx_manager: Sender<Msg2Game>) -> Self {
         let (tx_factory, rx_factory) = channel(50);
 
         // Since this only needs to be done once... we'll clone it from here.

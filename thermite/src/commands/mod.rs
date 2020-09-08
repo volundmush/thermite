@@ -5,7 +5,7 @@ pub mod login;
 pub mod system;
 pub mod user;
 
-use crate::protocol::ProtocolLink;
+use thermite_protocol::ProtocolLink;
 use crate::lobby::ProgramState;
 use tokio::macros::support::Future;
 use std::collections::HashMap;
@@ -19,6 +19,10 @@ pub enum HelpCategory {
     System,
 }
 
+pub enum CommandAction {
+    UserMessage(isize, String)
+}
+
 #[derive(Clone, Debug)]
 pub struct Command {
     pub name: String,
@@ -26,12 +30,12 @@ pub struct Command {
     pub help_category: Option<HelpCategory>,
     pub admin_level: u8,
     pub login_command: bool,
-    pub action: fn(&String, &String, &HashMap<String, String>, &mut ProgramState) -> Box<dyn Future<Output = Result<(), Box<dyn Error>>>>
+    pub action: fn(&String, &String, &HashMap<String, String>, &mut ProgramState) -> Vec<CommandAction>
 }
 
 impl Command {
     fn new(name: String, help_text: Option<String>, help_category: Option<HelpCategory>, admin_level: u8, login_command: bool,
-           action: fn(&String, &String, &HashMap<String, String>, &mut ProgramState) -> Box<dyn Future<Output = Result<(), Box<dyn Error>>>>) -> Self {
+           action: fn(&String, &String, &HashMap<String, String>, &mut ProgramState) -> Vec<CommandAction>) -> Self {
         Self {
             name,
             help_text,
