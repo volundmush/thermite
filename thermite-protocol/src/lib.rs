@@ -61,5 +61,6 @@ pub struct ProtocolLink {
     pub addr: SocketAddr,
     pub tls: bool,
     pub capabilities: ProtocolCapabilities,
-    pub tx_protocol: Sender<Msg2MudProtocol>
+    pub tx_protocol: Sender<Msg2MudProtocol>,
+    pub json_data: JsonValue
 }
