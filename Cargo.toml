@@ -7,5 +7,6 @@ members = [
     "thermite-ansi",
     "thermite-protocol",
     "thermite-lobby",
-    "thermite-portal"
+    "thermite-portal",
+    "thermite-mush"
 ]
