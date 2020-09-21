@@ -1616,6 +1616,7 @@ dependencies = [
 name = "thermite-mush"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "serde",
  "serde_derive",
  "serde_json",

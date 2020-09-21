@@ -2,6 +2,10 @@ use serde::prelude::*;
 use serde_json;
 use serde_derive;
 use std::collections::{HashSet, HashMap};
+use std::fmt::{Display, Formatter};
+use std::convert::TryFrom;
+use std::cell::{RefCell, Ref, RefMut};
+use std::rc::Rc;
 
 pub type Dbref = isize;
 pub type Timestamp = usize;
@@ -137,7 +141,7 @@ pub enum FlagPerm {
 pub struct Flag {
     pub name: String,
     pub letter: String,
-    pub obj_types: HashSet<ObjType>,
+    pub obj_types: HashSet<usize>,
     pub perms: HashSet<FlagPerm>,
     pub negate_perms: HashSet<FlagPerm>,
     pub aliases: HashSet<String>
@@ -145,57 +149,66 @@ pub struct Flag {
 
 #[derive(Default)]
 pub struct FlagManager {
-    pub flags: Vec<Flag>,
-    pub name_index: HashMap<String, usize>,
-    pub letter_index: HashMap<String, usize>,
-    pub holder_index: HashMap<usize, HashSet<Dbref>>,
-    pub type_index: HashMap<ObjType, HashSet<usize>>,
-    pub alias_index: HashMap<String, usize>
+    pub flags: HashMap<String, Rc<RefCell<Flag>>>,
+    pub letter_index: HashMap<char, Rc<RefCell<Flag>>>,
+    pub type_index: HashMap<Rc<RefCell<ObjType>>, HashSet<Rc<RefCell<Flag>>>>,
+    pub alias_index: HashMap<String, Rc<RefCell<Flag>>>,
 }
 
-pub enum LockFlag {
-    Visual,
-    NoInherit,
-    NoClone,
-    Wizard,
-    Locked
+impl FlagManager {
+    pub fn load(&mut self, flags: Vec<Flag>) -> Result<(), DbError> {
+        for flag in flags {
+            self.add_flag(flag)?;
+        }
+        Ok(())
+    }
+
+    pub fn add_flag(&mut self, flag: Flag) -> Result<(), DbError> {
+        let name = flag.name.clone();
+        let letter = flag.letter.clone();
+        let types = flag.obj_types.clone();
+        let aliases = flag.aliases.clone();
+
+        if self.full_index.contains_key(name.as_str()) {
+            return Err(DbError::new("A flag with this name or alias already exists."))
+        }
+
+        if self.letter_index.contains_key(letter.as_str()) {
+            return Err(DbError::new("A flag with this letter already exists."))
+        }
+
+        for alias in &aliases {
+            if self.full_index.contains_key(alias.as_str()) {
+                return Err(DbError::new("A flag with this name or alias already exists."))
+            }
+        }
+        // All verifications have passed - perform the add.
+        self.flags.push(flag);
+        let idx = self.flags.len();
+        self.name_index.insert(name.clone(), idx);
+        self.full_index.insert(name.clone(), idx);
+        self.letter_index(letter, idx);
+
+        for t in types {
+            if !self.type_index.contains_key(&t) {
+                self.type_index.insert(t, HashSet::default())
+            }
+            if let Some(ind) = self.type_index.get_mut(&t) {
+                ind.insert(idx);
+            }
+        }
+
+        Ok(())
+    }
 }
 
-pub enum LockType {
-    Basic,
-    Enter,
-    Teleport,
-    Use,
-    Page,
-    Zone,
-    Parent,
-    Link,
-    Open,
-    Mail,
-    User(String),
-    Speech,
-    Listen,
-    Command,
-    Leave,
-    Drop,
-    Dropin,
-    Give,
-    From,
-    Pay,
-    Receive,
-    Follow,
-    Examine,
-    Chzone,
-    Forward,
-    Filter,
-    Infilter,
-    Control,
-    Dropto,
-    Destroy,
-    Interact,
-    Take,
-    Mailforward,
-    Chown
+pub struct LockFlag {
+    name: String
+}
+
+pub struct LockType {
+    name: String,
+    custom: bool
 }
 
 pub struct Lock {
@@ -204,12 +217,29 @@ pub struct Lock {
     pub key: String
 }
 
-pub enum ObjType {
-    Garbage,
-    Room,
-    Exit,
-    Thing,
-    Player
+pub struct ObjType {
+    name: String,
+    letter: String,
+}
+
+pub struct ObjTypeManager {
+    pub objtypes: Vec<ObjType>,
+    pub name_idx: HashMap<String, usize>,
+    pub letter_idx: HashMap<String, usize>
+}
+
+impl TryFrom<&str> for ObjType {
+    type Error = DbError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_uppercase().as_str() {
+            "ROOM" => Ok(Self::Room),
+            "EXIT" => Ok(Self::Exit),
+            "THING" => Ok(Self::Thing),
+            "PLAYER" => Ok(Self::Player),
+            _ => Err(DbError::from(format!("Cannot deserialize ObjType {}", value)))
+        }
+    }
 }
 
 pub struct ObjAttr {
@@ -232,6 +262,7 @@ pub struct Obj {
     pub zone: DbRef,
     pub money: Money,
     pub obj_type: ObjType,
+    pub flags: HashSet<Rc<RefCell<Flag>>>,
     pub creation_timestamp: Timestamp,
     pub modification_timestamp: Timestamp,
     pub attributes: HashMap<usize, ObjAttr>,
@@ -283,4 +314,40 @@ pub struct GameState {
     pub functions: FunctionManager,
     pub commands: CommandManager,
     pub connections: HashSet<String>
+}
+
+
+#[derive(Debug, Display, Error)]
+pub struct DbError {
+    data: String
+}
+
+impl Display for DbError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!( f, "{}", self.data)
+    }
+}
+
+impl DbError {
+    pub fn new(src: &str) -> Self {
+        Self {
+            data: src.to_string()
+        }
+    }
+}
+
+impl From<&str> for DbError {
+    fn from(src: &str) -> Self {
+        Self {
+            data: src.to_string()
+        }
+    }
+}
+
+impl From<String> for DbError {
+    fn from(src: String) -> Self {
+        Self {
+            data: src
+        }
+    }
 }
