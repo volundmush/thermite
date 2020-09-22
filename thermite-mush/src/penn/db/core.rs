@@ -11,45 +11,7 @@ pub type Dbref = isize;
 pub type Timestamp = usize;
 pub type Money = isize;
 
-pub enum AttributeFlag {
-    NoCommand,
-    NoInherit,
-    NoClone,
-    MortalDark,
-    Wizard,
-    Veiled,
-    Nearby,
-    Locked,
-    Safe,
-    Visual,
-    Public,
-    Debug,
-    NoDebug,
-    Regexp,
-    Case,
-    NoSpace,
-    NoName,
-    AaHear,
-    AmHear,
-    Prefixmatch,
-    Quiet,
-    Branch
-}
 
-pub struct Attribute {
-    pub name: String,
-    pub flags: HashSet<AttributeFlag>,
-    pub data: String,
-    pub aliases: HashSet<String>
-}
-
-#[derive(Default)]
-pub struct AttributeManager {
-    pub attributes: Vec<Attribute>,
-    pub name_index: HashMap<String, usize>,
-    pub alias_index: HashMap<String, usize>,
-    pub holders_index: HashMap<usize, HashSet<Dbref>>
-}
 
 
 pub enum FunctionRestriction {

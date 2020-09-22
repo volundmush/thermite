@@ -1,8 +1,11 @@
+-- noinspection SqlNoDataSourceInspectionForFile
+
 CREATE TABLE IF NOT EXISTS attributeflag (
     id INTEGER NOT NULL PRIMARY KEY,
     name VARCHAR(20) NOT NULL UNIQUE COLLATE NOCASE,
+    letter VARCHAR(1) NULL UNIQUE,
     perm VARCHAR(255) NOT NULL DEFAULT "#TRUE",
-    reset_perm VARCHAR(255) NOT NULL DEFAULT "#TRUE",
+    reset_perm VARCHAR(255) NOT NULL DEFAULT "#TRUE"
 );
 
 CREATE TABLE IF NOT EXISTS attribute (
@@ -36,7 +39,7 @@ CREATE TABLE IF NOT EXISTS dbobjtype (
 CREATE TABLE IF NOT EXISTS flag (
     id INTEGER NOT NULL PRIMARY KEY,
     name VARCHAR(255) NOT NULL UNIQUE COLLATE NOCASE,
-    letter VARCHAR(1) NULL UNIQUE COLLATE NOCASE,
+    letter VARCHAR(1) NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS flag_dbobjtypes (
@@ -47,6 +50,7 @@ CREATE TABLE IF NOT EXISTS flag_dbobjtypes (
     FOREIGN KEY(flag_id) REFERENCES flag(id) ON UPDATE CASCADE ON DELETE CASCADE,
     UNIQUE(dbobjtype_id, flag_id)
 );
+
 
 CREATE TABLE IF NOT EXISTS dbobj (
     id INTEGER NOT NULL PRIMARY KEY,
@@ -95,4 +99,52 @@ CREATE TABLE IF NOT EXISTS dbobj_attributes_flags (
     FOREIGN KEY(dbobj_attribute_id) REFERENCES dbobj_attributes(id) ON UPDATE CASCADE ON DELETE CASCADE,
     FOREIGN KEY(attributeflag_id) REFERENCES attributeflag(id) ON UPDATE CASCADE ON DELETE CASCADE,
     UNIQUE(dbobj_attribute_id, attributeflag_id)
+);
+
+CREATE TABLE IF NOT EXISTS lockflag (
+    id INTEGER NOT NULL PRIMARY KEY,
+    name VARCHAR(20) NOT NULL UNIQUE COLLATE NOCASE,
+    letter VARCHAR(1) NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS locktype (
+    id INTEGER NOT NULL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL UNIQUE COLLATE NOCASE
+);
+
+CREATE TABLE IF NOT EXISTS dbobj_lock (
+    id INTEGER NOT NULL PRIMARY KEY,
+    dbobj_id INTEGER NOT NULL,
+    locktype_id INTEGER NOT NULL,
+    value TEXT NOT NULL,
+    FOREIGN KEY(dbobj_id) REFERENCES dbobj(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY(locktype_id) REFERENCES locktype(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    UNIQUE(dbobj_id, locktype_id)
+);
+
+CREATE TABLE IF NOT EXISTS dbobj_userlock (
+    id INTEGER NOT NULL PRIMARY KEY,
+    dbobj_id INTEGER NOT NULL,
+    name VARCHAR(30) NOT NULL COLLATE NOCASE,
+    value TEXT NOT NULL,
+    FOREIGN KEY(dbobj_id) REFERENCES dbobj(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    UNIQUE(dbobj_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS dbobj_lock_flags (
+    id INTEGER NOT NULL PRIMARY KEY,
+    dbobj_lock_id INTEGER NOT NULL,
+    lockflag_id INTEGER NOT NULL,
+    FOREIGN KEY(dbobj_lock_id) REFERENCES dbobj_lock(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY(lockflag_id) REFERENCES lockflag(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    UNIQUE(dbobj_lock_id, lockflag_id)
+);
+
+CREATE TABLE IF NOT EXISTS dbobj_userlock_flags (
+    id INTEGER NOT NULL PRIMARY KEY,
+    dbobj_userlock_id INTEGER NOT NULL,
+    lockflag_id INTEGER NOT NULL,
+    FOREIGN KEY(dbobj_userlock_id) REFERENCES dbobj_userlock(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY(lockflag_id) REFERENCES lockflag(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    UNIQUE(dbobj_userlock_id, lockflag_id)
 );
