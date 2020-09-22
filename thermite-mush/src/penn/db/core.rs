@@ -14,44 +14,6 @@ pub type Money = isize;
 
 
 
-pub enum FunctionRestriction {
-    God,
-    Wizard,
-    Admin,
-    NoGagged,
-    NoFixed,
-    NoGuest,
-    Nobody,
-    Logname,
-    Logargs,
-    Noparse,
-    Localize,
-    Userfn,
-    Nosidefx,
-    Deprecated,
-    NoPlayer
-}
-
-pub enum FunctionAction {
-    Builtin(fn() -> ()),
-    User(Dbref, usize)
-}
-
-pub struct Function {
-    pub name: String,
-    pub restrictions: HashSet<FunctionRestriction>,
-    pub min_args: isize,
-    pub max_args: isize,
-    pub even_args: bool,
-    pub aliases: HashSet<String>
-}
-
-#[derive(Default)]
-pub struct FunctionManager {
-    pub functions: Vec<Function>,
-    pub func_index: HashMap<String, usize>
-}
-
 pub enum CommandFlag {
     NoParse,
     EqSplit,

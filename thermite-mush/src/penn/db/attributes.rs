@@ -3,23 +3,22 @@ use std::cell::{RefCell, Ref, RefMut};
 use std::rc::Rc;
 use super::Dbref;
 
-
 pub struct AttributeFlag {
-    pub name: String,
-    pub aliases: HashSet<String>,
-    pub letter: String,
-    pub set_perms: String,
-    pub reset_perms: String,
-    pub see_perms: String,
+    pub name: &'static str,
+    pub aliases: HashSet<&'static str>,
+    pub letter: &'static str,
+    pub set_perms: &'static str,
+    pub reset_perms: &'static str,
+    pub see_perms: &'static str,
     pub tree_inherit: bool,
     pub internal: bool
 }
 
 #[derive(Default)]
 pub struct AttributeFlagManager {
-    attribute_flags: HashMap<String, Rc<AttributeFlag>>,
-    letter_index: HashMap<String, Rc<AttributeFlag>>,
-    alias_index: HashMap<String, Rc<AttributeFlag>>
+    attribute_flags: HashMap<&'static str, Rc<AttributeFlag>>,
+    letter_index: HashMap<&'static str, Rc<AttributeFlag>>,
+    alias_index: HashMap<&'static str, Rc<AttributeFlag>>
 }
 
 impl AttributeFlagManager {
@@ -40,11 +39,11 @@ impl AttributeFlagManager {
         }
 
         let rcflag = Rc::new(flag);
-        self.letter_index.insert(rcflag.letter.clone(), rcflag.clone());
+        self.letter_index.insert(rcflag.letter, rcflag.clone());
         for alias in &rcflag.aliases {
-            self.alias_index.insert(alias.clone(), rcflag.clone());
+            self.alias_index.insert(alias, rcflag.clone());
         }
-        self.attribute_flags.insert(rcflag.name.clone(), rcflag);
+        self.attribute_flags.insert(rcflag.name, rcflag);
 
     }
 }
@@ -57,54 +56,54 @@ impl Default for AttributeFlagManager {
             alias_index: Default::default(),
         };
         manager.add_flag(AttributeFlag {
-            name: "no_command".to_string(),
-            letter: "$".to_string(),
+            name: "no_command",
+            letter: "$",
             aliases: Default::default(),
-            set_perms: "#TRUE".to_string(),
-            reset_perms: "#TRUE".to_string(),
-            see_perms: "#TRUE".to_string(),
+            set_perms: "#TRUE",
+            reset_perms: "#TRUE",
+            see_perms: "#TRUE",
             tree_inherit: true,
             internal: false
         });
         manager.add_flag(AttributeFlag {
-            name: "no_inherit".to_string(),
-            letter: "i".to_string(),
+            name: "no_inherit",
+            letter: "i",
             aliases: Default::default(),
-            set_perms: "#TRUE".to_string(),
-            reset_perms: "#TRUE".to_string(),
-            see_perms: "#TRUE".to_string(),
+            set_perms: "#TRUE",
+            reset_perms: "#TRUE",
+            see_perms: "#TRUE",
             tree_inherit: true,
             internal: false
         });
         manager.add_flag(AttributeFlag {
-            name: "no_clone".to_string(),
-            letter: "c".to_string(),
+            name: "no_clone",
+            letter: "c",
             aliases: Default::default(),
-            set_perms: "#TRUE".to_string(),
-            reset_perms: "#TRUE".to_string(),
-            see_perms: "#TRUE".to_string(),
-            tree_inherit: true,
-            internal: false
-        });
-
-        manager.add_flag(AttributeFlag {
-            name: "mortal_dark".to_string(),
-            letter: "m".to_string(),
-            aliases: hashset!["hidden".to_string()],
-            set_perms: "#TRUE".to_string(),
-            reset_perms: "#TRUE".to_string(),
-            see_perms: "#TRUE".to_string(),
+            set_perms: "#TRUE",
+            reset_perms: "#TRUE",
+            see_perms: "#TRUE",
             tree_inherit: true,
             internal: false
         });
 
         manager.add_flag(AttributeFlag {
-            name: "wizard".to_string(),
-            letter: "w".to_string(),
+            name: "mortal_dark",
+            letter: "m",
+            aliases: hashset!["hidden"],
+            set_perms: "#TRUE",
+            reset_perms: "#TRUE",
+            see_perms: "#TRUE",
+            tree_inherit: true,
+            internal: false
+        });
+
+        manager.add_flag(AttributeFlag {
+            name: "wizard",
+            letter: "w",
             aliases: Default::default(),
-            set_perms: "FLAG^ROYALTY|FLAG^WIZARD".to_string(),
-            reset_perms: "FLAG^ROYALTY|FLAG^WIZARD".to_string(),
-            see_perms: "#TRUE".to_string(),
+            set_perms: "FLAG^ROYALTY|FLAG^WIZARD",
+            reset_perms: "FLAG^ROYALTY|FLAG^WIZARD",
+            see_perms: "#TRUE",
             tree_inherit: true,
             internal: false
         });
@@ -114,17 +113,36 @@ impl Default for AttributeFlagManager {
 }
 
 pub struct Attribute {
-    pub name: String,
-    pub flags: HashSet<AttributeFlag>,
+    pub name: Rc<str>,
+    pub flags: HashSet<Rc<AttributeFlag>>,
     pub data: String,
-    pub aliases: HashSet<String>
+    pub aliases: HashSet<Rc<str>>,
+    pub internal: bool
 }
 
 
 #[derive(Default)]
 pub struct AttributeManager {
-    pub attributes: Vec<Attribute>,
-    pub name_index: HashMap<String, usize>,
-    pub alias_index: HashMap<String, usize>,
-    pub holders_index: HashMap<usize, HashSet<Dbref>>
+    pub attributes: HashMap<Rc<str>, Rc<RefCell<Attribute>>>,
+    pub alias_index: HashMap<Rc<str>, Rc<RefCell<Attribute>>>,
+    pub flags: AttributeFlagManager
+}
+
+impl AttributeManager {
+    pub fn add_attribute(&mut self, attr: Attribute) {
+
+    }
+}
+
+impl Default for AttributeManager {
+    fn default() -> Self {
+        let mut manager = Self {
+            attributes: Default::default(),
+            alias_index: Default::default(),
+            flags: Default::default()
+        };
+
+        // add default attributes here....
+
+    }
 }
