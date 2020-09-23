@@ -1,31 +1,16 @@
 use std::{
     io::{Read, BufRead},
-    convert::TryFrom,
     error::Error,
     collections::{HashMap, HashSet},
-    fmt::{Display, Formatter}
 };
 
-use regex::Regex;
-
 use super::{
-    GameState,
-    Dbref,
-    Timestamp,
-    Money,
-    AttributeFlag,
-    Attribute,
-    AttributeManager,
-    FlagPerm,
-    Flag,
-    FlagManager,
-    LockFlag,
-    LockType,
-    Lock,
-    ObjType,
-    ObjAttr,
-    Obj,
-    DbError
+    typedefs::{Dbref, Money, Timestamp},
+    core::{DbError, GameState},
+    attributes::{Attribute, AttributeFlag, AttributeFlagManager, AttributeManager},
+    flags::{Flag, FlagPerm, FlagManager},
+    locks::{LockType, LockFlag, Lock},
+    objects::{Obj, ObjType, ObjAttr}
 };
 
 use super::flatfile::{
@@ -33,7 +18,6 @@ use super::flatfile::{
     FlatLine,
     NodeValue,
     get_idx,
-    idx_line
 };
 
 #[derive(Debug, Clone)]

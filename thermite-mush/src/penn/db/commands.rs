@@ -1,48 +1,57 @@
 use std::collections::{HashSet, HashMap};
 use std::rc::Rc;
+use super::typedefs::Dbref;
 
-pub enum CommandFlag2 {
-    NoParse,
-    EqSplit,
-    LsArgs,
-    RsArgs,
-    RsNoParse,
-    NoEval
-}
-
+#[derive(Debug)]
 pub struct CommandFlag {
     name: &'static str
 }
 
+#[derive(Debug)]
 pub enum CommandAction {
     Builtin(fn() -> ()),
     NotImplemented
 }
 
-pub enum CommandHook {
-    Ignore,
-    Override(bool),
-    Before,
-    After,
-    Extend(bool)
-}
-
+#[derive(Debug)]
 pub struct Command {
-    pub name: String,
-    pub flags: HashSet<CommandFlag>,
-    pub lock: String,
-    pub restrict_error: Option<String>,
+    pub name: Rc<str>,
+    pub flags: HashSet<Rc<CommandFlag>>,
+    pub lock: Rc<str>,
+    pub restrict_error: Option<Rc<str>>,
     pub action: CommandAction,
-    pub hooks: HashMap<CommandHook, (Dbref, usize)>
+    pub hook_ignore: Option<(Dbref, String)>,
+    pub hook_override: Option<(Dbref, String, bool)>,
+    pub hook_before: Option<(Dbref, String)>,
+    pub hook_after: Option<(Dbref, String)>,
+    pub hook_extend: Option<(Dbref, String, bool)>
 }
 
-
+#[derive(Debug)]
 pub struct CommandManager {
-    pub commands: Vec<Command>,
-    pub flags: HashMap<&'static str, Rc<CommandFlag>>
-    pub name_index: HashMap<String, usize>,
+    pub commands: HashMap<Rc<str>, Rc<Command>>,
+    pub flags: HashMap<&'static str, Rc<CommandFlag>>,
+}
+
+impl CommandManager {
+    fn add_flag(&mut self, flag: CommandFlag) {
+
+    }
 }
 
 impl Default for CommandManager {
-    
+    fn default() -> Self {
+        let mut manager = Self {
+            commands: Default::default(),
+            flags: Default::default(),
+        };
+
+        manager.add_flag(CommandFlag {name: "noparse"});
+        manager.add_flag(CommandFlag {name: "eqsplit"});
+        manager.add_flag(CommandFlag {name: "lsargs"});
+        manager.add_flag(CommandFlag {name: "rsargs"});
+        manager.add_flag(CommandFlag {name: "rsnoparse"});
+
+        manager
+    }
 }

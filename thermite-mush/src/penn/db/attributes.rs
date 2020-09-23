@@ -1,8 +1,11 @@
 use std::collections::{HashSet, HashMap};
-use std::cell::{RefCell, Ref, RefMut};
+use std::cell::{RefCell};
 use std::rc::Rc;
-use super::Dbref;
+use super::{
+    typedefs::Dbref,
+};
 
+#[derive(Debug)]
 pub struct AttributeFlag {
     pub name: &'static str,
     pub aliases: HashSet<&'static str>,
@@ -14,7 +17,7 @@ pub struct AttributeFlag {
     pub internal: bool
 }
 
-#[derive(Default)]
+#[derive(Debug)]
 pub struct AttributeFlagManager {
     attribute_flags: HashMap<&'static str, Rc<AttributeFlag>>,
     letter_index: HashMap<&'static str, Rc<AttributeFlag>>,
@@ -89,7 +92,11 @@ impl Default for AttributeFlagManager {
         manager.add_flag(AttributeFlag {
             name: "mortal_dark",
             letter: "m",
-            aliases: hashset!["hidden"],
+            aliases: {
+                let mut hid: HashSet<&'static str> = Default::default();
+                hid.insert("hidden");
+                hid
+            },
             set_perms: "#TRUE",
             reset_perms: "#TRUE",
             see_perms: "#TRUE",
@@ -108,10 +115,11 @@ impl Default for AttributeFlagManager {
             internal: false
         });
 
-        Self
+        manager
     }
 }
 
+#[derive(Debug)]
 pub struct Attribute {
     pub name: Rc<str>,
     pub flags: HashSet<Rc<AttributeFlag>>,
@@ -120,8 +128,7 @@ pub struct Attribute {
     pub internal: bool
 }
 
-
-#[derive(Default)]
+#[derive(Debug)]
 pub struct AttributeManager {
     pub attributes: HashMap<Rc<str>, Rc<RefCell<Attribute>>>,
     pub alias_index: HashMap<Rc<str>, Rc<RefCell<Attribute>>>,
@@ -144,5 +151,7 @@ impl Default for AttributeManager {
 
         // add default attributes here....
 
+
+        manager
     }
 }

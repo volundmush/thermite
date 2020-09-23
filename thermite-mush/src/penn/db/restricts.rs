@@ -1,15 +1,16 @@
 use std::collections::{HashSet, HashMap};
 use std::cell::{RefCell, Ref, RefMut};
 use std::rc::Rc;
-use super::Dbref;
+use super::typedefs::Dbref;
 
-
+#[derive(Debug)]
 pub struct Restriction {
     pub name: &'static str,
     pub command: bool,
     pub function: bool,
 }
 
+#[derive(Debug)]
 pub struct RestrictionManager {
     pub restrictions: HashMap<&'static str, Rc<Restriction>>,
     pub command_restrictions: HashMap<&'static str, Rc<Restriction>>,
@@ -20,11 +21,11 @@ impl RestrictionManager {
     fn add_restriction(&mut self, restrict: Restriction) {
         let r = Rc::new(restrict);
         if r.command {
-            self.command_restrictions.insert(r.name, r.clone())
-        }
+            self.command_restrictions.insert(r.name, r.clone());
+        };
         if r.function {
-            self.function_restrictions.insert(r.name, r.clone())
-        }
+            self.function_restrictions.insert(r.name, r.clone());
+        };
         self.restrictions.insert(r.name, r);
     }
 }
@@ -127,6 +128,6 @@ impl Default for RestrictionManager {
             command: true
         });
 
-        Self
+        manager
     }
 }

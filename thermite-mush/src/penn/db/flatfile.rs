@@ -1,7 +1,11 @@
-use super::{Dbref, DbError};
+use super::{
+    core::DbError,
+    typedefs::Dbref
+};
 use std::{
-    io::{Read, BufRead, Lines},
-    error::Error
+    io::{Read, BufRead, Lines, Bytes},
+    error::Error,
+    iter::Iterator
 };
 
 #[derive(Debug, Clone)]
@@ -49,7 +53,7 @@ impl From<String> for FlatLine {
 impl From<&str> for FlatLine {
     fn from(src: &str) -> Self {
 
-        let depth = count_spaces(src.as_str());
+        let depth = count_spaces(src);
         let (spaces, data) = src.split_at(depth);
         let mut split= data.splitn(2, " ");
         let name = split.next().unwrap().to_string();
@@ -57,7 +61,7 @@ impl From<&str> for FlatLine {
 
         if val.starts_with("\"") {
             // This is a string value. We want everything except the beginning and ending quotes.
-            let out = val.slice(1..val.len()-1).unwrap();
+            let out = &val[1..val.len()-1];
             return Self {
                 name,
                 value: NodeValue::Text(out.to_string()),
@@ -98,11 +102,14 @@ pub fn idx_line(flatlines: &[FlatLine], depth: usize, start: &str) -> Option<usi
 pub fn get_idx(flatlines: &[FlatLine], depth: usize, start: &str, emsg: &str) -> Result<usize, DbError> {
     match idx_line(flatlines, depth, start) {
         Some(idx) => Ok(idx),
-        None => DbError::new(emsg)
+        None => Err(DbError::new(emsg))
     }
 }
 
 pub fn value_terminated(val: &str) -> bool {
+    if !val.ends_with('"') {
+        return false;
+    }
     // We know for a fact that this string ends in a ".
     let (data, unused) = val.split_at(val.len()-1);
     // Scan until we encounter something that's not a \ and then count \ total...if odd, the last is
@@ -110,18 +117,19 @@ pub fn value_terminated(val: &str) -> bool {
 
     let mut slashes: usize = 0;
     for c in data.as_bytes().iter().rev() {
-        if c == 92 {
+        if c == &92 {
             slashes += 1;
         } else {
             break;
         }
     }
+    println!("CHECKING TERMINATION: {} - {} - {}", val, slashes, slashes % 2 == 0);
     slashes % 2 == 0
 }
 
 pub fn count_spaces(line: &str) -> usize {
     let mut space_count: usize = 0;
-    for c in data.chars() {
+    for c in line.chars() {
         if c == ' ' {
             space_count += 1;
         } else {
@@ -131,14 +139,70 @@ pub fn count_spaces(line: &str) -> usize {
     space_count
 }
 
-pub struct FlatFileReader<T> {
-    source: Lines<T>,
+enum SplitterState {
+    Data,
+    CR,
+    Escaped
 }
 
-impl<T> FlatFileReader<T> where T: Read + BufRead {
+// This is designed to read PennMUSH's strange flatfile format and turn any lines which
+// include 'quoted strings' into single strings.
+pub struct FlatFileSplitter<T> {
+    source: Bytes<T>,
+    buffer: Vec<u8>,
+    quoted: bool,
+    state: SplitterState
+}
+
+impl<T> FlatFileSplitter<T> where T: Read {
     pub fn new(source: T) -> Self {
         Self {
-            source: source.lines(),
+            source: source.bytes(),
+            buffer: Default::default(),
+            quoted: false,
+            state: SplitterState::Data
+        }
+    }
+}
+
+
+impl Iterator for FlatFileSplitter<T> {
+    type Item = std::io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Consume bytes from source until we hit a newline. If we ever encounter a double-quote,
+        // enter quoted mode and keep consuming until we encounter an unescaped ending double-quote
+        // followed by a newline.
+
+        loop {
+            if let Some(res) = self.source.next() {
+                match res {
+                    Ok(c) => {
+
+                    },
+                    Err(e) => {
+                        // this is some kind of io error that isn't an EOF.
+                    }
+                }
+            } else {
+                // We hit an EOF.
+            }
+        }
+
+    }
+}
+
+
+
+pub struct FlatFileReader<T> {
+    source: T
+}
+
+impl<T> FlatFileReader<T> where
+    T: Iterator<Item=std::io::Result<String>> {
+    pub fn new(source: T) -> Self {
+        Self {
+            source,
         }
     }
 
@@ -162,7 +226,6 @@ impl<T> FlatFileReader<T> where T: Read + BufRead {
                 return out
             }
         }
-        out
     }
 
     pub fn next(&mut self) -> Option<Result<FlatLine, Box<dyn Error>>> {
@@ -178,6 +241,15 @@ impl<T> FlatFileReader<T> where T: Read + BufRead {
         }
 
         let depth = count_spaces(buffer.as_str());
+
+        if depth == 0 && buffer.starts_with("+") {
+            return Some(Ok(FlatLine {
+                name: buffer,
+                depth,
+                value: NodeValue::None
+            }))
+        };
+
         let (_, rest) = buffer.split_at(depth);
 
         return if let Some(idx) = rest.find(' ') {

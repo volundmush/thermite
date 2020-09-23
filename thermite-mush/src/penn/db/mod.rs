@@ -1,8 +1,11 @@
-pub mod v6;
-mod core;
-mod flatfile;
+//pub mod v6;
+pub mod core;
+pub mod flatfile;
 pub mod attributes;
 pub mod functions;
 pub mod restricts;
-
-pub use core::*;
+pub mod commands;
+pub mod flags;
+pub mod locks;
+pub mod objects;
+pub mod typedefs;
