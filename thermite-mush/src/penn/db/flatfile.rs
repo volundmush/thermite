@@ -6,8 +6,13 @@ use super::{
 use std::{
     io::{Read, BufRead, Lines, Bytes},
     error::Error,
-    iter::Iterator
+    iter::Iterator,
+    fs::File
 };
+
+use encoding_rs::*;
+use encoding_rs_io::*;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub enum NodeValue {
@@ -91,14 +96,18 @@ impl From<&str> for FlatValueNode {
     }
 }
 
+#[derive(Debug)]
 pub enum FlatLine {
     Header(String),
     Node(FlatValueNode)
 }
 
-impl From<&str> for FlatLine {
-    fn from(src: &str) -> Self {
-        if src.starts_with('+') {
+impl From<String> for FlatLine {
+    fn from(src: String) -> Self {
+        if src.starts_with('+')
+            || src.starts_with('!')
+            || src.starts_with('~')
+            || src.starts_with('*') {
             Self::Header(src.to_string())
         } else {
             Self::Node(FlatValueNode::from(src))
@@ -138,8 +147,8 @@ impl<T> FlatFileSplitter<T> where T: Read {
 }
 
 
-impl Iterator for FlatFileSplitter<T> {
-    type Item = std::io::Result<&str>;
+impl<T> Iterator for FlatFileSplitter<T> where T: Read {
+    type Item = std::io::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Consume bytes from source until we hit a newline. If we ever encounter a double-quote,
@@ -153,28 +162,30 @@ impl Iterator for FlatFileSplitter<T> {
                     Ok(c) => {
                         if self.quoted {
                             if self.escaped {
-                                self.buffer.push(c);
+                                buffer.push(c);
                                 self.escaped = false;
                             } else {
                                 match c {
-                                    '\\' => {
+                                    92 => {
                                         self.escaped = true;
                                     },
-                                    '"' => {
+                                    34 => {
                                         self.quoted = false;
-                                        self.buffer.push(c);
+                                        buffer.push(c);
                                     },
-                                    _ => self.buffer.push(c);
+                                    _ => {
+                                        buffer.push(c);
+                                    }
                                 }
                             }
                         } else {
                             match c {
-                                '\r' => {
+                                13 => {
                                     // We just ignore this character outside of quoted strings.
                                 },
-                                '\n' => {
+                                10 => {
                                     // Newline detected outside quotes! Convert buffer to a &str and shove it out.
-                                    match str::from_utf8(self.buffer.as_slice()) {
+                                    match String::from_utf8(buffer) {
                                         Ok(out) => {
                                             return Some(Ok(out));
                                         },
@@ -185,10 +196,13 @@ impl Iterator for FlatFileSplitter<T> {
                                         }
                                     }
                                 },
-                                '"' => {
+                                34 => {
                                     // Begin quoted string.
                                     self.quoted = true;
-                                    self.buffer.push(c);
+                                    buffer.push(c);
+                                },
+                                _ => {
+                                    buffer.push(c);
                                 }
                             }
                         }
@@ -214,15 +228,17 @@ pub struct FlatFileReader<T> {
 }
 
 impl<T> FlatFileReader<T> where
-    T: Iterator<Item=std::io::Result<&str>> {
+    T: Iterator<Item=std::io::Result<String>> {
     pub fn new(source: T) -> Self {
         Self {
-            source,
+            source
         }
     }
 }
 
-impl Iterator for FlatFileReader<T> {
+impl<T> Iterator for FlatFileReader<T> where
+    T: Iterator<Item=std::io::Result<String>>
+{
     type Item = std::io::Result<FlatLine>;
 
     fn next(&mut self) -> Option<Self::Item> {

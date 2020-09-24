@@ -1,4 +1,4 @@
-//pub mod v6;
+pub mod v6;
 pub mod core;
 pub mod flatfile;
 pub mod attributes;
