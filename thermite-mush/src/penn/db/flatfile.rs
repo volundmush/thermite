@@ -211,6 +211,76 @@ impl FlatLine {
             }
         }
     }
+
+    pub fn dbref(&self, name: &str, err: &str) -> Result<Dbref, DbError> {
+        match self {
+            Self::Node(val) => {
+                if val.name.starts_with(name) {
+                    match &val.value {
+                        NodeValue::Db(t) => {
+                            Ok(t.clone())
+                        },
+                        _ => {
+                            return Err(DbError::new(err).into());
+                        }
+                    }
+                } else {
+                    return Err(DbError::new(err).into());
+                }
+            },
+            _ => {
+                return Err(DbError::new(err).into());
+            }
+        }
+    }
+
+    pub fn text(&self, name: &str, err: &str) -> Result<String, DbError> {
+
+        match self {
+            Self::Node(val) => {
+                if val.name.starts_with(name) {
+                    match &val.value {
+                        NodeValue::Text(t) => {
+                            Ok(t.clone())
+                        },
+                        _ => {
+                            return Err(DbError::new(err).into());
+                        }
+                    }
+                } else {
+                    return Err(DbError::new(err).into());
+                }
+            },
+            _ => {
+                return Err(DbError::new(err).into());
+            }
+        }
+
+    }
+
+    pub fn num(&self, name: &str, err: &str) -> Result<isize, DbError> {
+
+        match self {
+            Self::Node(val) => {
+                if val.name.starts_with(name) {
+                    match &val.value {
+                        NodeValue::Number(t) => {
+                            Ok(t.clone())
+                        },
+                        _ => {
+                            return Err(DbError::new(err).into());
+                        }
+                    }
+                } else {
+                    return Err(DbError::new(err).into());
+                }
+            },
+            _ => {
+                return Err(DbError::new(err).into());
+            }
+        }
+
+    }
 }
 
 pub fn count_spaces(line: &str) -> usize {

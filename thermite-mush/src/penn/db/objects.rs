@@ -20,7 +20,7 @@ pub struct ObjType {
 
 #[derive(Debug)]
 pub struct ObjAttr {
-    pub index: usize,
+    pub attr: Rc<RefCell<Attribute>>,
     pub value: String,
     pub flags: HashSet<Rc<AttributeFlag>>,
     pub owner: Dbref
