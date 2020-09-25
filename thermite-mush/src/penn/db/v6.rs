@@ -27,26 +27,32 @@ use encoding_rs_io::*;
 
 fn load_version(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
 
+    Ok(())
 }
 
 fn load_flags(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
 
+    Ok(())
 }
 
 fn load_powers(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
 
+    Ok(())
 }
 
 fn load_attributes(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
 
+    Ok(())
 }
 
 fn _load_obj(state: &mut GameState, db: Dbref, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
 
+    Ok(())
 }
 
 fn load_objects(state: &mut GameState, data: &[FlatLine], start: usize, index: &Vec<usize>) -> Result<(), Box<dyn Error>> {
 
+    Ok(())
 }
 
 pub fn read_v6(mut data: impl Read) -> Result<GameState, Box<dyn Error>> {
