@@ -7,11 +7,54 @@ use super::{
 };
 
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct FlagPerm {
     pub name: &'static str,
     pub set_perm: &'static str,
-    pub reset_perm: &'static str
+    pub reset_perm: &'static str,
+    pub system: bool,
+}
+
+#[derive(Debug)]
+pub struct FlagPermManager {
+    pub perms: HashMap<&'static str, Rc<FlagPerm>>
+}
+
+impl Default for FlagPermManager {
+    fn default() -> Self {
+        let mut manager = Self {
+            perms: Default::default()
+        };
+
+        // load flag perms here...
+
+        for perm in vec![
+            FlagPerm {name: "trusted", set_perm: "#TRUE", reset_perm: "TRUE", system: false},
+            FlagPerm {name: "royalty", set_perm: "FLAG^ROYALTY", reset_perm: "FLAG^ROYALTY", system: false},
+            FlagPerm {name: "wizard", set_perm: "FLAG^WIZARD", reset_perm: "FLAG^WIZARD", system: false},
+            FlagPerm {name: "god", set_perm: "#FALSE", reset_perm: "#FALSE", system: false},
+            FlagPerm {name: "dark", set_perm: "#FALSE", reset_perm: "#FALSE", system: false},
+            FlagPerm {name: "mdark", set_perm: "FLAG^WIZARD|FLAG^ROYALTY", reset_perm: "FLAG^WIZARD|FLAG^ROYALTY", system: false},
+            FlagPerm {name: "odark", set_perm: "#TRUE", reset_perm: "#TRUE", system: false},
+            FlagPerm {name: "internal", set_perm: "#FALSE", reset_perm: "#FALSE", system: true},
+            FlagPerm {name: "log", set_perm: "FLAG^WIZARD", reset_perm: "FLAG^WIZARD", system: false},
+            FlagPerm {name: "event", set_perm: "FLAG^WIZARD", reset_perm: "FLAG^WIZARD", system: false}
+        ] {
+            manager.perms.insert(perm.name, Rc::new(perm));
+        }
+
+        manager
+    }
+}
+
+impl FlagPermManager {
+    pub fn get_flag_perm(&self, name: &str) -> Option<Rc<FlagPerm>> {
+        if let Some(t) = self.perms.get(name) {
+            Some(t.clone())
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -30,6 +73,7 @@ pub struct FlagManager {
     pub flags: HashMap<Rc<str>, Rc<RefCell<Flag>>>,
     pub letter_index: HashMap<Rc<str>, Rc<RefCell<Flag>>>,
     pub alias_index: HashMap<Rc<str>, Rc<RefCell<Flag>>>,
+
 }
 
 impl FlagManager {
@@ -65,4 +109,6 @@ impl FlagManager {
 
         Ok(())
     }
+
+
 }

@@ -12,16 +12,10 @@ use super::{
     locks::{Lock, LockType}
 };
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct ObjType {
     pub name: &'static str,
     pub letter: &'static str,
-}
-
-#[derive(Debug)]
-pub struct ObjTypeManager {
-    pub objtypes: HashMap<&'static str, Rc<ObjType>>,
-    pub letter_idx: HashMap<&'static str, Rc<ObjType>>
 }
 
 #[derive(Debug)]
@@ -60,10 +54,54 @@ impl Obj {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct ObjManager {
     pub objects: HashMap<usize, Rc<RefCell<Obj>>>,
     pub player_names: HashMap<Rc<str>, Rc<RefCell<Obj>>>,
     // Names are stored this way so that a thousand objects named 'East' will not use a ton of RAM.
-    pub names: HashSet<Rc<str>>
+    pub names: HashSet<Rc<str>>,
+    pub objtypes: HashMap<&'static str, Rc<ObjType>>,
+    pub letter_idx: HashMap<&'static str, Rc<ObjType>>
+}
+
+impl Default for ObjManager {
+    fn default() -> Self {
+        let mut manager = Self {
+            objects: Default::default(),
+            player_names: Default::default(),
+            names: Default::default(),
+            objtypes: Default::default(),
+            letter_idx: Default::default()
+        };
+
+        for t in vec![
+            ObjType {name: "PLAYER", letter: "P"},
+            ObjType {name: "ROOM", letter: "R"},
+            ObjType {name: "EXIT", letter: "E"},
+            ObjType {name: "THING", letter: "E"}
+        ] {
+            manager.add_obj_type(t)
+        }
+        manager
+    }
+}
+
+impl ObjManager {
+    pub fn get_obj_type(&self, name: &str) -> Option<Rc<ObjType>> {
+        if let Some(t) = self.objtypes.get(name) {
+            Some(t.clone())
+        } else if let Some(t) = self.letter_idx.get(name) {
+            Some(t.clone())
+        } else {
+            None
+        }
+    }
+
+    fn add_obj_type(&mut self, t: ObjType) {
+        let name = t.name;
+        let letter = t.letter;
+        let r = Rc::new(t);
+        self.objtypes.insert(name, r.clone());
+        self.letter_idx.insert(letter, r);
+    }
 }

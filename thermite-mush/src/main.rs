@@ -16,7 +16,7 @@ use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
 
-    //let mut gamestate = read_v6(File::open("/home/volund/exthird/outdb")?)?;
+    let mut gamestate = read_v6(File::open("/home/volund/exthird/outdb")?)?;
 
     let code = r#"@set %#=BOO:This is cool;@select/inline 2=1,{Rawr!},2,{RAAAA\}AWR};@tel me=Place;@assert/inline 1=Do this;@break/inline 2={@pemit %#=rawr!;@pemit %#=rawr2!}"#;
 

@@ -1,7 +1,6 @@
 use std::{
     ops::Range,
 };
-
 use regex::{Regex, Match};
 
 pub fn range_from_idx(idx: Vec<usize>) -> Vec<Range<usize>> {

@@ -33,6 +33,22 @@ impl From<NodeValue> for String {
     }
 }
 
+impl NodeValue {
+    pub fn as_str(&self) -> &str {
+        match self {
+            NodeValue::Text(txt) => txt.as_str(),
+            _ => ""
+        }
+    }
+
+    pub fn is_str(&self) -> bool {
+        match self {
+            NodeValue::Text(txt) => true,
+            _ => false
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FlatValueNode {
     pub name: String,
@@ -47,6 +63,16 @@ impl Default for FlatValueNode {
             depth: 0,
             value: NodeValue::None
         }
+    }
+}
+
+impl FlatValueNode {
+    pub fn as_str(&self) -> &str {
+        self.value_str()
+    }
+
+    pub fn value_str(&self) -> &str {
+        self.value.as_str()
     }
 }
 
@@ -111,6 +137,78 @@ impl From<String> for FlatLine {
             Self::Header(src.to_string())
         } else {
             Self::Node(FlatValueNode::from(src))
+        }
+    }
+}
+
+impl FlatLine {
+    pub fn is_header(&self) -> bool {
+        match self {
+            Self::Header(txt) => {
+                true
+            },
+            _ => {
+                false
+            }
+        }
+    }
+
+    pub fn is_node(&self) -> bool {
+        return !self.is_header()
+    }
+
+    pub fn is_str(&self) -> bool {
+        match self {
+            Self::Node(val) => {
+                val.value.is_str()
+            },
+            _ => {
+                false
+            }
+        }
+    }
+
+    pub fn name_str(&self) -> &str {
+        match self {
+            Self::Header(txt) => {
+                txt.as_str()
+            },
+            Self::Node(val) => {
+                val.name.as_str()
+            }
+        }
+    }
+
+    pub fn value_str(&self) -> &str {
+        match self {
+            Self::Header(txt) => {
+                txt.as_str()
+            },
+            Self::Node(val) => {
+                val.value_str()
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Header(txt) => {
+                txt.as_str()
+            },
+            Self::Node(val) => {
+                val.as_str()
+            }
+        }
+    }
+
+    pub fn depth(&self) -> usize {
+        match self {
+            Self::Header(txt) => {
+                0
+            },
+            Self::Node(val) => {
+                val.depth
+            }
         }
     }
 }

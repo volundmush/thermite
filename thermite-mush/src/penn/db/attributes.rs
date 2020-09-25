@@ -125,7 +125,8 @@ pub struct Attribute {
     pub flags: HashSet<Rc<AttributeFlag>>,
     pub data: String,
     pub aliases: HashSet<Rc<str>>,
-    pub internal: bool
+    pub internal: bool,
+    pub creator: Dbref
 }
 
 #[derive(Debug)]

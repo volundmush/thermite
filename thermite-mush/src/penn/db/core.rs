@@ -9,7 +9,7 @@ use std::error::Error;
 use super::{
     attributes::{AttributeManager},
     functions::{FunctionManager},
-    flags::{FlagManager},
+    flags::{FlagManager, FlagPermManager},
     commands::{CommandManager},
     objects::{ObjManager}
 };
@@ -19,6 +19,7 @@ use super::{
 pub struct GameState {
     pub objects: ObjManager,
     pub flags: FlagManager,
+    pub flag_perms: FlagPermManager,
     pub powers: FlagManager,
     pub attributes: AttributeManager,
     pub functions: FunctionManager,
