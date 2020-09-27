@@ -3,16 +3,17 @@ use std::{
     error::Error,
     collections::{HashMap, HashSet},
     ops::Range,
-    rc::Rc
+    rc::Rc,
+    cell::RefCell
 };
 
 use super::{
-    typedefs::{Dbref, Money, Timestamp},
+    typedefs::{DbRef, Money, Timestamp},
     core::{DbError, GameState},
-    attributes::{Attribute, AttributeFlag, AttributeFlagManager, AttributeManager},
-    flags::{Flag, FlagPerm, FlagManager},
-    locks::{LockType, LockFlag, Lock},
-    objects::{Obj, ObjType, ObjAttr}
+    attributes::{Attribute, AttributeData, AttributeFlag, AttributeFlagManager, AttributeManager},
+    flags::{Flag, FlagData, FlagPerm, FlagManager, FlagPermManager},
+    locks::{LockFlag, Lock},
+    objects::{Obj, ObjData, ObjType, ObjAttr, ObjManager}
 };
 
 use super::flatfile::{
@@ -21,6 +22,10 @@ use super::flatfile::{
     FlatLine,
     FlatValueNode,
     NodeValue,
+};
+
+use thermite_util::{
+    text::StringInterner
 };
 
 use encoding_rs::*;
@@ -32,18 +37,18 @@ fn load_version(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn 
     Ok(())
 }
 
-fn _load_flag_alias(state: &GameState, data: &[FlatLine]) -> Result<(Rc<str>, HashSet<Rc<str>>), Box<dyn Error>> {
-    let name = Rc::from(data[0].text("name", "Improperly formmatted flag alias")?);
-    let mut aliases: HashSet<Rc<str>> = Default::default();
+fn _load_flag_alias(data: &[FlatLine]) -> Result<(String, HashSet<String>), Box<dyn Error>> {
+    let name = data[0].text("name", "Improperly formmatted flag alias")?.to_uppercase();
+    let mut aliases: HashSet<String> = Default::default();
 
     for line in &data[1..] {
-        aliases.insert(Rc::from(line.text("alias", "improperly formatted flag alias")?));
+        aliases.insert(line.text("alias", "improperly formatted flag alias")?.to_uppercase());
     }
     Ok((name, aliases))
 }
 
-fn _load_flag_aliases(state: &GameState, data: &[FlatLine], idx: usize) -> Result<HashMap<Rc<str>, HashSet<Rc<str>>>, Box<dyn Error>> {
-    let mut out: HashMap<Rc<str>, HashSet<Rc<str>>> = Default::default();
+fn _load_flag_aliases(data: &[FlatLine]) -> Result<HashMap<String, HashSet<String>>, Box<dyn Error>> {
+    let mut out: HashMap<String, HashSet<String>> = Default::default();
 
     let mut name_idx: Vec<usize> = Default::default();
 
@@ -55,28 +60,38 @@ fn _load_flag_aliases(state: &GameState, data: &[FlatLine], idx: usize) -> Resul
     name_idx.push(data.len()+1);
     let mut ranges: Vec<Range<usize>> = name_idx.as_slice().windows(2).map(|x| x[0]..x[1]-1).collect();
 
+    for r in ranges {
+        let (name, aliases) = _load_flag_alias(&data[r])?;
+        out.insert(name, aliases);
+    }
+
     Ok(out)
 }
 
-fn _load_flag_single(state: &GameState, data: &[FlatLine]) -> Result<Flag, Box<dyn Error>> {
+fn _load_flag_single(mut manager: &mut FlagManager, mut perms: &mut FlagPermManager, mut objects: &mut ObjManager, data: &[FlatLine]) -> Result<Flag, Box<dyn Error>> {
     let name = data[0].text("name", "Improperly formatted flag data")?;
     let letter = data[1].text("letter", "Improperly formatted flag data")?;
+
+    if letter.len() > 1 {
+        return Err(DbError::new("improperly formatted flag data: letter").into());
+    }
+    let letter = letter.chars().next();
 
     let mut obj_types: HashSet<Rc<ObjType>> = Default::default();
 
     for name in data[2].text("type", "Improperly formatted flag data")?.split_ascii_whitespace() {
-        if let Some(t) = state.objects.get_obj_type(name) {
+        if let Some(t) = objects.get_obj_type(name) {
             obj_types.insert(t);
         } else {
             return Err(DbError::new("Improper type in a flag").into())
         }
     }
 
-    let mut perms: HashSet<Rc<FlagPerm>> = Default::default();
+    let mut flag_perms: HashSet<Rc<FlagPerm>> = Default::default();
 
     for name in data[3].text("perms", "Improperly formatted flag data")?.split_ascii_whitespace() {
-        if let Some(t) = state.flag_perms.get_flag_perm(name) {
-            perms.insert(t);
+        if let Some(t) = perms.get_flag_perm(name) {
+            flag_perms.insert(t);
         } else {
             return Err(DbError::new("Improper perm in a flag").into())
         }
@@ -84,27 +99,30 @@ fn _load_flag_single(state: &GameState, data: &[FlatLine]) -> Result<Flag, Box<d
 
     let mut negate_perms: HashSet<Rc<FlagPerm>> = Default::default();
 
-    for name in negate_perms_str.split_ascii_whitespace() {
-        if let Some(t) = state.flag_perms.get_flag_perm(name) {
+    for name in data[4].text("negate_perms", "improperly formatted flag data")?.split_ascii_whitespace() {
+        if let Some(t) = perms.get_flag_perm(name) {
             negate_perms.insert(t);
         } else {
             return Err(DbError::new("Improper negate_perm in a flag").into())
         }
     }
 
-    Ok(Flag {
-        name: Rc::from(name),
-        letter: Rc::from(letter),
+    let flag_mut = FlagData {
+        letter,
         obj_types,
-        perms,
+        perms: flag_perms,
         negate_perms,
         aliases: Default::default(),
         holders: Default::default()
+    };
+
+    Ok(Flag {
+        name: manager.interner.get_or_intern(name.to_uppercase().as_str()),
+        data: RefCell::new(flag_mut)
     })
 }
 
-fn _load_flags(state: &GameState, data: &[FlatLine]) -> Result<Vec<Flag>, Box<dyn Error>> {
-    let mut out: Vec<Flag> = Default::default();
+fn _load_flags(mut manager: &mut FlagManager, mut perms: &mut FlagPermManager, mut objects: &mut ObjManager, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
     let mut alias_idx: usize = 0;
     let mut name_idx: Vec<usize> = Default::default();
 
@@ -123,36 +141,38 @@ fn _load_flags(state: &GameState, data: &[FlatLine]) -> Result<Vec<Flag>, Box<dy
     name_idx.push(alias_idx);
     let mut ranges: Vec<Range<usize>> = name_idx.as_slice().windows(2).map(|x| x[0]..x[1]).collect();
 
-    let mut aliases = _load_flag_aliases(state, data, alias_idx)?;
+    let mut aliases = _load_flag_aliases(&data[alias_idx..])?;
     for r in ranges {
-        let mut flag = _load_flag_single(state, &data[r])?;
-        if let Some(aliaset) = aliases.remove(&flag.name) {
-            flag.aliases = aliaset;
+        let mut flag = _load_flag_single(manager, perms, objects,&data[r])?;
+        if let Some(aliaset) = aliases.remove(manager.interner.get(flag.name)) {
+            let mut fdat = flag.data.borrow_mut();
+            for alias in aliaset {
+                let idx = manager.interner.get_or_intern(alias.to_uppercase().as_str());
+                fdat.aliases.insert(idx);
+            };
         }
-        println!("Successfully loaded Flag: {:?}", flag);
+        manager.load_flag(flag)?;
     }
 
-    Ok(out)
+    Ok(())
 }
 
 fn load_flags(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
-    state.flags.load(_load_flags(&state, data)?)?;
+    _load_flags(&mut state.flags, &mut state.flag_perms, &mut state.objects, data)?;
     Ok(())
 }
 
 fn load_powers(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
-    state.powers.load(_load_flags(&state, data)?)?;
+    _load_flags(&mut state.powers, &mut state.flag_perms, &mut state.objects, data)?;
     Ok(())
 }
 
-fn _load_attr_single(state: &GameState, data: &[FlatLine]) -> Result<Attribute, Box<dyn Error>> {
-
+fn _load_attr_single(mut state: &mut GameState, data: &[FlatLine]) -> Result<Attribute, Box<dyn Error>> {
     let name = data[0].text("name", "Improperly formatted attribute data")?;
-
     let mut flags: HashSet<Rc<AttributeFlag>> = Default::default();
 
     for name in data[1].text("flags", "improperly formatted attribute data")?.split_ascii_whitespace() {
-        if let Some(t) = state.attributes.get_attr_flag(name) {
+        if let Some(t) = state.attributes.flags.get_attr_flag(name) {
             flags.insert(t);
         } else {
             return Err(DbError::new("Improper attribute flag in attribute").into())
@@ -163,19 +183,21 @@ fn _load_attr_single(state: &GameState, data: &[FlatLine]) -> Result<Attribute, 
 
     let attr_data = data[3].text("data", "improperly formatted attribute data")?;
 
-    Ok(Attribute {
-        name: Rc::from(name),
+    let a_data = AttributeData {
         flags,
-        data: attr_data,
         aliases: Default::default(),
-        internal: false,
+        data: attr_data,
         creator
+    };
+
+    Ok(Attribute {
+        name: state.attributes.interner.get_or_intern(name.to_uppercase().as_str()),
+        internal: false,
+        data: RefCell::new(a_data)
     })
 }
 
-fn load_attributes(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
-    let mut attrs: Vec<Attribute> = Default::default();
-
+fn load_attributes(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
     let mut alias_idx: usize = 0;
     let mut name_idx: Vec<usize> = Default::default();
 
@@ -194,22 +216,68 @@ fn load_attributes(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<d
     name_idx.push(alias_idx);
     let mut ranges: Vec<Range<usize>> = name_idx.as_slice().windows(2).map(|x| x[0]..x[1]).collect();
 
-    let mut aliases = _load_flag_aliases(state, data, alias_idx)?;
+    let mut aliases = _load_flag_aliases(&data[alias_idx..])?;
     for r in ranges {
-        let mut attr = _load_attr_single(state, &data[r])?;
-        if let Some(aliaset) = aliases.remove(&attr.name) {
-            attr.aliases = aliaset;
-        }
-        state.attributes.add_attribute(attr);
-        println!("Successfully loaded Attribute: {:?}", attr);
-    }
+        let mut attr = _load_attr_single(&mut state, &data[r])?;
 
+        if let Some(aliaset) = aliases.remove(state.attributes.interner.get(attr.name)) {
+            let mut attr_data = attr.data.borrow_mut();
+            for a in aliaset {
+                let idx = state.attributes.interner.get_or_intern(a.as_str());
+                attr_data.aliases.insert(idx);
+            }
+        }
+
+        let r = Rc::new(attr);
+        for alias in &r.data.borrow().aliases {
+            state.attributes.alias_index.insert(*alias, r.clone());
+        }
+        state.attributes.attributes.insert(r.name, r);
+
+    }
 
     Ok(())
 }
 
-fn _load_obj(state: &GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
+fn _load_obj_lock(mut state: &mut GameState, data: &[FlatLine]) -> Result<(String, Lock), Box<dyn Error>> {
+    let name = data[0].text("type", "invalid lock data")?.to_lowercase();
+    let creator = data[1].dbref("creator", "invalid lock data")?;
+    let flag_data = data[2].text("flags", "invalid lock data")?;
+    let key = state.locks.key_interner.get_or_intern(&data[4].text("key", "invalid lock data")?);
 
+    let mut flags: HashSet<Rc<LockFlag>> = Default::default();
+
+    for f in flag_data.split_ascii_whitespace() {
+        if let Some(flag) = state.locks.get_lock_flag(f) {
+            flags.insert(flag);
+        } else {
+            return Err(DbError::new("invalid lock data: lock flags").into())
+        }
+    }
+
+    Ok((name, Lock {
+        creator,
+        flags,
+        key
+    }))
+
+}
+
+fn _load_obj_locks(mut state: &mut GameState, data: &[FlatLine], mut obj_data: &mut ObjData) -> Result<(), Box<dyn Error>> {
+    for ldata in data[1..].chunks(5) {
+        let (name, lock) = _load_obj_lock(&mut state, ldata)?;
+        let idx = state.locks.type_interner.get_or_intern(name.as_str());
+        obj_data.locks.insert(idx, lock);
+    }
+    Ok(())
+}
+
+fn _load_obj_attrs(mut state: &mut GameState, data: &[FlatLine], mut obj_data: &mut ObjData) -> Result<(), Box<dyn Error>> {
+
+    Ok(())
+}
+
+fn _load_obj(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
     let mut lock_idx: usize = 0;
     let mut attr_idx: usize = 0;
     let mut owner_idx: usize = 0;
@@ -240,7 +308,8 @@ fn _load_obj(state: &GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>>
         if !info1[0].value_str().starts_with('!') {
             return Err(DbError::new("Invalid Object Data: dbref").into())
         }
-        info1[0].value_str().parse::<Dbref>()?
+        let num = info1[0].value_str()[1..].parse::<usize>()?;
+        DbRef::Num(num)
     };
 
     let name = info1[1].text("name", "Improperly formatted object data")?;
@@ -249,7 +318,7 @@ fn _load_obj(state: &GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>>
 
     let owner = info2[0].dbref("owner", "Improperly formatted object data")?;
     let zone = info2[1].dbref("zone", "improperly formatted object data")?;
-    let pennies = info2[2].num("pennies", "improperly formatted object data")?;
+    let money = info2[2].num("pennies", "improperly formatted object data")?;
 
     let type_name = {
         match info2[3].num("type", "improperly formatted object data")? {
@@ -263,28 +332,59 @@ fn _load_obj(state: &GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>>
         }
     };
 
-    let obj_type = state.objects.get_obj_type(type_name);
+    let obj_type = state.objects.get_obj_type(type_name).unwrap();
 
-    let mut flags: HashSet<Rc<RefCell<Flag>>> = Default::default();
+    let mut flags: HashSet<Rc<Flag>> = Default::default();
 
-    for f in info2[4].name("flags", "improperly formatted object data")?.split_ascii_whitespace() {
-        if let Some(t) = state.attributes.get_attr_flag(name) {
-        flags.insert(t);
-    } else {
-        return Err(DbError::new("Improper attribute flag in attribute").into())
+    for f in info2[4].text("flags", "improperly formatted object data")?.split_ascii_whitespace() {
+        if let Some(t) = state.flags.get_flag(f) {
+            flags.insert(t);
+        } else {
+            return Err(DbError::new("Improper flag in object data").into())
+        }
     }
-}
 
+    let creation_timestamp = info2[7].num("created", "improperly formatted object data")?;
+
+    let mut obj_data = ObjData {
+        name: state.objects.interner.get_or_intern(name.as_str()),
+        parent,
+        children: Default::default(),
+        location,
+        contents: Default::default(),
+        zoned: Default::default(),
+        owner,
+        belongings: Default::default(),
+        zone,
+        money,
+        flags,
+        modification_timestamp: 0,
+        attributes: Default::default(),
+        locks: Default::default(),
+        connections: Default::default()
+    };
+    _load_obj_locks(&mut state, lock_data, &mut obj_data)?;
+    _load_obj_attrs(&mut state, attr_data, &mut obj_data)?;
+
+    let mut obj = Obj {
+        db,
+        obj_type,
+        creation_timestamp,
+        data: RefCell::new(obj_data)
+    };
+
+    state.objects.load(obj);
     Ok(())
 }
 
-fn load_objects(state: &mut GameState, data: &[FlatLine], start: usize, index: &Vec<usize>) -> Result<(), Box<dyn Error>> {
+fn load_objects(mut state: &mut GameState, data: &[FlatLine], start: usize, index: &Vec<usize>) -> Result<(), Box<dyn Error>> {
     let mut ranges: Vec<Range<usize>> = index.as_slice().windows(2).map(|x| x[0]..x[1]).collect();
 
     for r in ranges {
-        let obj = _load_obj(&state, &data[r])?;
+        let obj = _load_obj(&mut state, &data[r])?;
         // Do something with loaded obj here.
     }
+    state.objects.load_final();
 
     Ok(())
 }

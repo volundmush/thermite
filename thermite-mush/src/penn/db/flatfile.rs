@@ -1,24 +1,27 @@
 use super::{
     core::DbError,
-    typedefs::Dbref
+    typedefs::DbRef
 };
 
 use std::{
     io::{Read, BufRead, Lines, Bytes},
     error::Error,
     iter::Iterator,
-    fs::File
+    fs::File,
+    rc::Rc
 };
 
 use encoding_rs::*;
 use encoding_rs_io::*;
 use std::path::Path;
+use std::fmt::Display;
+use serde::export::Formatter;
 
 #[derive(Debug, Clone)]
 pub enum NodeValue {
     None,
     Text(String),
-    Db(Dbref),
+    Db(DbRef),
     Number(isize),
 }
 
@@ -26,7 +29,7 @@ impl From<NodeValue> for String {
     fn from(src: NodeValue) -> Self {
         match src {
             NodeValue::Text(txt) => txt,
-            NodeValue::Db(dbr) => format!("#{}", dbr),
+            NodeValue::Db(dbr) => dbr.to_string(),
             NodeValue::Number(num) => format!("{}", num),
             NodeValue::None => "".to_string()
         }
@@ -102,12 +105,16 @@ impl From<&str> for FlatValueNode {
         }
 
         if val.starts_with("#") {
-            // this is a dbref value. parse it!
-            let (unused, num) = val.split_at(1);
-            let count = num.parse::<Dbref>().unwrap();
+            let db: DbRef = if val.starts_with("#-") {
+                // this is a null Dbref.
+                DbRef::None
+            } else {
+                let (_, num) = val.split_at(1);
+                DbRef::Num(num.parse::<usize>().unwrap())
+            };
             return Self {
                 name,
-                value: NodeValue::Db(count),
+                value: NodeValue::Db(db),
                 depth,
             }
         }
@@ -212,7 +219,7 @@ impl FlatLine {
         }
     }
 
-    pub fn dbref(&self, name: &str, err: &str) -> Result<Dbref, DbError> {
+    pub fn dbref(&self, name: &str, err: &str) -> Result<DbRef, DbError> {
         match self {
             Self::Node(val) => {
                 if val.name.starts_with(name) {
@@ -220,16 +227,17 @@ impl FlatLine {
                         NodeValue::Db(t) => {
                             Ok(t.clone())
                         },
+                        NodeValue::Text(s) => Ok(DbRef::Name(Rc::from(s.clone()))),
                         _ => {
-                            return Err(DbError::new(err).into());
+                            return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
                         }
                     }
                 } else {
-                    return Err(DbError::new(err).into());
+                    return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
                 }
             },
             _ => {
-                return Err(DbError::new(err).into());
+                return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
             }
         }
     }
@@ -244,15 +252,15 @@ impl FlatLine {
                             Ok(t.clone())
                         },
                         _ => {
-                            return Err(DbError::new(err).into());
+                            return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
                         }
                     }
                 } else {
-                    return Err(DbError::new(err).into());
+                    return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
                 }
             },
             _ => {
-                return Err(DbError::new(err).into());
+                return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
             }
         }
 
@@ -268,15 +276,15 @@ impl FlatLine {
                             Ok(t.clone())
                         },
                         _ => {
-                            return Err(DbError::new(err).into());
+                            return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
                         }
                     }
                 } else {
-                    return Err(DbError::new(err).into());
+                    return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
                 }
             },
             _ => {
-                return Err(DbError::new(err).into());
+                return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
             }
         }
 

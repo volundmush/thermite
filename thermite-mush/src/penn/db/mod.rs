@@ -1,11 +1,8 @@
-pub mod v6;
+//pub mod v6;
 pub mod core;
-pub mod flatfile;
-pub mod attributes;
+//pub mod flatfile;
 pub mod functions;
-pub mod restricts;
 pub mod commands;
-pub mod flags;
-pub mod locks;
 pub mod objects;
 pub mod typedefs;
+pub mod props;

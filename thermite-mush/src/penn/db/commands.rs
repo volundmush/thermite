@@ -1,57 +1,36 @@
 use std::collections::{HashSet, HashMap};
 use std::rc::Rc;
-use super::typedefs::Dbref;
+use super::{
+    typedefs::DbRef,
+    props::{Property, PropertyData, PropertyManager}
+};
 
-#[derive(Debug)]
-pub struct CommandFlag {
-    name: &'static str
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CommandAction {
     Builtin(fn() -> ()),
-    NotImplemented
+    User
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub struct Hook {
+    pub db: DbRef,
+    pub attr: usize,
+    pub inline: bool
+}
+
+#[derive(Debug, Clone)]
 pub struct Command {
-    pub name: Rc<str>,
-    pub flags: HashSet<Rc<CommandFlag>>,
-    pub lock: Rc<str>,
-    pub restrict_error: Option<Rc<str>>,
     pub action: CommandAction,
-    pub hook_ignore: Option<(Dbref, String)>,
-    pub hook_override: Option<(Dbref, String, bool)>,
-    pub hook_before: Option<(Dbref, String)>,
-    pub hook_after: Option<(Dbref, String)>,
-    pub hook_extend: Option<(Dbref, String, bool)>
+    pub hook_ignore: Option<Hook>,
+    pub hook_override: Option<Hook>,
+    pub hook_before: Option<Hook>,
+    pub hook_after: Option<Hook>,
+    pub hook_extend: Option<Hook>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CommandManager {
-    pub commands: HashMap<Rc<str>, Rc<Command>>,
-    pub flags: HashMap<&'static str, Rc<CommandFlag>>,
-}
+    pub internal_manager: PropertyManager,
+    pub commands: HashMap<usize, Command>,
 
-impl CommandManager {
-    fn add_flag(&mut self, flag: CommandFlag) {
-
-    }
-}
-
-impl Default for CommandManager {
-    fn default() -> Self {
-        let mut manager = Self {
-            commands: Default::default(),
-            flags: Default::default(),
-        };
-
-        manager.add_flag(CommandFlag {name: "noparse"});
-        manager.add_flag(CommandFlag {name: "eqsplit"});
-        manager.add_flag(CommandFlag {name: "lsargs"});
-        manager.add_flag(CommandFlag {name: "rsargs"});
-        manager.add_flag(CommandFlag {name: "rsnoparse"});
-
-        manager
-    }
 }

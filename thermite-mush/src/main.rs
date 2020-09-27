@@ -1,7 +1,7 @@
 use thermite_mush::{
     penn::db::core::GameState,
-    penn::db::flatfile::{FlatFileReader, FlatFileSplitter, FlatLine},
-    penn::db::v6::read_v6,
+    //penn::db::flatfile::{FlatFileReader, FlatFileSplitter, FlatLine},
+    //penn::db::v6::read_v6,
     penn::mushcode::parser::{
         split_action_list,
         split_argument_list,
@@ -16,7 +16,10 @@ use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
 
-    let mut gamestate = read_v6(File::open("/home/volund/exthird/outdb")?)?;
+    //let mut gamestate = read_v6(File::open("/home/volund/exthird/outdb")?)?;
+
+    let mut gamestate = GameState::default();
+    gamestate.load_defaults("mush_defaults.json")?;
 
     let code = r#"@set %#=BOO:This is cool;@select/inline 2=1,{Rawr!},2,{RAAAA\}AWR};@tel me=Place;@assert/inline 1=Do this;@break/inline 2={@pemit %#=rawr!;@pemit %#=rawr2!}"#;
 
