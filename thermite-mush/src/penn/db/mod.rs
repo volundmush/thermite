@@ -6,3 +6,4 @@ pub mod commands;
 pub mod objects;
 pub mod typedefs;
 pub mod props;
+pub mod schema;

@@ -39,9 +39,7 @@ pub struct PropertyData {
     pub flags: HashSet<Rc<Property>>,
     pub holders: HashSet<Rc<Obj>>,
     pub creator: DbRef,
-    pub data: String,
-    pub command: bool,
-    pub function: bool
+    pub data: String
 }
 
 #[derive(Debug)]
