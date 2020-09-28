@@ -3,7 +3,6 @@ use std::cell::{RefCell, Ref, RefMut};
 use std::rc::Rc;
 use super::{
     typedefs::DbRef,
-    props::{PropertyManager, Property, PropertyData}
 };
 
 #[derive(Debug)]
@@ -22,6 +21,5 @@ pub struct Function {
 
 #[derive(Debug, Default)]
 pub struct FunctionManager {
-    pub internal_manager: PropertyManager,
     pub functions: HashMap<usize, Function>,
 }

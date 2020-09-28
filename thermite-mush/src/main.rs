@@ -1,6 +1,6 @@
 use thermite_mush::{
     penn::db::core::GameState,
-    //penn::db::flatfile::{FlatFileReader, FlatFileSplitter, FlatLine},
+    penn::db::flatfile::{FlatFileReader, FlatFileSplitter, FlatLine},
     //penn::db::v6::read_v6,
     penn::mushcode::parser::{
         split_action_list,
@@ -14,12 +14,22 @@ use std::io::prelude::*;
 use std::fs::File;
 use std::error::Error;
 
+use std::{
+    io::{Read, BufRead, BufReader}
+};
+
 fn main() -> Result<(), Box<dyn Error>> {
 
     //let mut gamestate = read_v6(File::open("/home/volund/exthird/outdb")?)?;
 
     let mut gamestate = GameState::default();
-    gamestate.load_defaults("mush_defaults.json")?;
+
+    let mut f = File::open("mush_defaults.json")?;
+    let mut r = BufReader::new(f);
+    let mut j: serde_json::Value = serde_json::from_reader(r)?;
+
+    gamestate.load_defaults(&j)?;
+    println!("EXAMINING GAMESTATE: {:?}", gamestate.propalias);
 
     let code = r#"@set %#=BOO:This is cool;@select/inline 2=1,{Rawr!},2,{RAAAA\}AWR};@tel me=Place;@assert/inline 1=Do this;@break/inline 2={@pemit %#=rawr!;@pemit %#=rawr2!}"#;
 

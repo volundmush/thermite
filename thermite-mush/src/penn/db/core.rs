@@ -125,35 +125,46 @@ pub struct GameState {
 impl GameState {
 
 
-    pub fn find_property(&self, prop_type: usize, name: usize) -> Option<usize> {
+    pub fn property_find(&self, prop_type: usize, name_idx: usize) -> Option<usize> {
         // this will locate the row_id of a Property by its name or alias.
-        if let Some(found) = self.properties.iter().find(|x| x.name_match(prop_type, name)) {
+        if let Some(found) = self.properties.iter().find(|x| x.name_match(prop_type, name_idx)) {
             return Some(found.row_id)
         }
 
+        self.property_find_alias(prop_type, name_idx)
+    }
+
+    pub fn property_find_alias(&self, prop_type: usize, name: usize) -> Option<usize> {
         if let Some(found) = self.propalias.iter().find(|x| x.name_match(prop_type, name)) {
             return Some(found.property_id)
         }
         None
     }
 
-    pub fn find_property_name(&self, type_name: &str, name: &str) -> Option<usize> {
+    pub fn property_find_name(&self, prop_type: usize, name: &str) -> Option<usize> {
+        if let Some(name_idx) = self.propnames.find(name.to_uppercase().as_str()) {
+            return self.property_find(prop_type, name_idx)
+        }
+        None
+    }
+
+    pub fn property_find_name_and_type(&self, type_name: &str, name: &str) -> Option<usize> {
         // this works similarly to find, except it takes strings, and it will not create new entries.
         if let Some(type_idx) = self.proptypes.find(type_name.to_uppercase().as_str()) {
             if let Some(name_idx) = self.propnames.find(name.to_uppercase().as_str()) {
-                return self.find_property(type_idx, name_idx)
+                return self.property_find(type_idx, name_idx)
             }
         }
         None
     }
 
-    // What it says on the tin. Note that this doesn't -initialize- a property properly, only creates it.
-    pub fn get_or_create_property(&mut self, type_name: &str, name: &str) -> usize {
-        // the row id of a proptypes is its existence. these names cannot change once loaded.
-        let type_idx = self.proptypes.get_or_intern(type_name.to_uppercase());
-        let name_idx = self.propnames.get_or_intern(name.to_uppercase());
+    pub fn property_get_or_create_type(&mut self, type_name: &str) -> usize {
+        self.proptypes.get_or_intern(type_name.to_uppercase())
+    }
 
-        if let Some(i) = self.find_property(type_idx, name_idx) {
+    pub fn property_get_or_create(&mut self, type_idx: usize, name: &str) -> usize {
+        let name_idx = self.propnames.get_or_intern(name.to_uppercase());
+        if let Some(i) = self.property_find(type_idx, name_idx) {
             return i
         }
         let mut prop = Property::default();
@@ -165,90 +176,127 @@ impl GameState {
         prop_idx
     }
 
-    pub fn load_defaults(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
-        let mut f = File::open(path)?;
-        let mut r = BufReader::new(f);
+    // What it says on the tin. Note that this doesn't -initialize- a property properly, only creates it.
+    pub fn property_get_or_create_and_type(&mut self, type_name: &str, name: &str) -> usize {
+        // the row id of a proptypes is its existence. these names cannot change once loaded.
+        let type_idx = self.property_get_or_create_type(type_name);
+        self.property_get_or_create(type_idx, name)
+    }
 
-        let mut j: serde_json::Value = serde_json::from_reader(r)?;
-        if let JV::Object(dict) = j {
+    pub fn property_add_alias(&mut self, prop_idx: usize, alias: &str) -> Result<(), DbError> {
+        // this will error if the alias already exists! It will not validate if an alias name is good!
+        let a_idx = self.propnames.get_or_intern(alias.to_uppercase());
+        let type_idx = self.properties.get(prop_idx).unwrap().property_type_id;
+        if let Some(res) = self.property_find_alias(type_idx, a_idx) {
+            // return Err(DbError::new("alias already used"))
+            Ok(())
+        } else {
+            let mut new_alias = Alias::default();
+            new_alias.row_id = self.propalias.len();
+            new_alias.property_id = prop_idx;
+            new_alias.name_id = a_idx;
+            new_alias.property_type_id = type_idx;
+            self.propalias.push(new_alias);
+            Ok(())
+        }
+    }
+
+
+    pub fn load_defaults(&mut self, data: &JV) -> Result<(), DbError> {
+        if let JV::Object(dict) = data {
             if let Some(props) = dict.get("props") {
-                self.load_props(props)?
+                self.load_props(props)?;
 
 
             } else {
-                return Err(DbError::new("invalid json from defaults file: props").into())
+                return Err(DbError::new("invalid json from defaults file: props"))
             }
         } else {
-            return Err(DbError::new("invalid json from defaults file").into())
+            return Err(DbError::new("invalid json from defaults file"))
         }
         Ok(())
     }
 
-    pub fn load_props(&mut self, data: JV) -> Result<(), Box<dyn Error>> {
+    pub fn load_props(&mut self, data: &JV) -> Result<(), DbError> {
+        if let JV::Object(sections) = data {
+            for (prop_type_name, v) in sections {
+                let type_idx = self.property_get_or_create_type(prop_type_name);
+                if let JV::Object(props) = v {
+                    for (propname, def) in props {
+                        let mut prop_idx = self.property_get_or_create(type_idx, propname);
+                        if let JV::Object(fields) = def {
 
-    }
+                            // Aliases
+                            if let Some(alias_j) = fields.get("aliases") {
+                                if let JV::Array(alias_j_l) = alias_j {
+                                    for ali_v in alias_j_l {
+                                        if let JV::String(alias) = ali_v {
+                                            self.property_add_alias(prop_idx, alias)?;
+                                        } else {
+                                            return Err(DbError::new("alias data must be an array of strings"));
+                                        }
+                                    }
+                                } else {
+                                    return Err(DbError::new("alias data must be an array of strings"));
+                                }
+                            }
 
+                            // Letter
+                            if let Some(letter_j) = fields.get("letter") {
+                                if let JV::String(letter) = letter_j {
+                                    if letter.len() > 0 {
+                                        if letter.len() == 1 {
+                                            let letter = letter.chars().next().unwrap();
+                                            let mut prop = self.properties.get_mut(prop_idx).unwrap();
+                                            prop.letter = Some(letter);
+                                        }
+                                    }
+                                } else {
+                                    return Err(DbError::new("letter data must be a string containing one character"));
+                                }
+                            }
 
-    pub fn get_obj(&self, db: DbRef) -> Result<Rc<Obj>, DbError> {
-        if let Some(r) = self.objects.objects.get(&db) {
-            Ok(r.clone())
+                            // Perms Section
+                            if let Some(see) = fields.get("see_perms") {
+                                if let JV::String(p) = see {
+                                    let lock_idx = self.lockkeys.get_or_intern(p.to_string());
+                                    let mut prop = self.properties.get_mut(prop_idx).unwrap();
+                                    prop.see_perms = lock_idx;
+                                } else {
+                                    return Err(DbError::new("perm data must be a lock string"));
+                                }
+                            }
+
+                            if let Some(see) = fields.get("set_perms") {
+                                if let JV::String(p) = see {
+                                    let lock_idx = self.lockkeys.get_or_intern(p.to_string());
+                                    let mut prop = self.properties.get_mut(prop_idx).unwrap();
+                                    prop.set_perms = lock_idx;
+                                } else {
+                                    return Err(DbError::new("perm data must be a lock string"));
+                                }
+                            }
+
+                            if let Some(see) = fields.get("reset_perms") {
+                                if let JV::String(p) = see {
+                                    let lock_idx = self.lockkeys.get_or_intern(p.to_string());
+                                    let mut prop = self.properties.get_mut(prop_idx).unwrap();
+                                    prop.reset_perms = lock_idx;
+                                } else {
+                                    return Err(DbError::new("perm data must be a lock string"));
+                                }
+                            }
+
+                        } else {
+                            return Err(DbError::new("no json data found for fields of prop"));
+                        }
+                    }
+                }
+
+            }
         } else {
-            Err(DbError::new("object not found"))
+            return Err(DbError::new("no json data found for props"));
         }
+        Ok(())
     }
-
-    pub fn get_bitlevel(&self, obj: &Rc<Obj>) -> usize {
-        if let DbRef::Num(i) = obj.db {
-            if i == 1 {
-                return 7
-            }
-        }
-
-        if self.props.obj_has_property(obj, "flag", "WIZARD", false, false) {
-            return 6
-        }
-        if self.props.obj_has_property(obj, "flag", "ROYALTY", false, false) {
-            return 5
-        }
-        if self.props.obj_has_property(obj, "power", "GUEST", false, false) {
-            return 0
-        }
-        1
-    }
-
-    pub fn obj_controls(&self, obj: &Rc<Obj>, vic: &Rc<Obj>) -> bool {
-        if self.props.obj_has_property(obj, "power", "GUEST", false, false) {
-            return false
-        }
-        if obj == vic {
-            return true
-        }
-        let v_bitlevel = self.get_bitlevel(vic);
-        if self.get_bitlevel(vic) >= 7 {
-            return false
-        }
-        let o_bitlevel = self.get_bitlevel(obj);
-        if o_bitlevel >= 5 && (o_bitlevel > v_bitlevel) {
-            return true
-        }
-        if self.props.obj_has_property(obj, "flag", "MISTRUST", false, false) {
-            return false
-        }
-        let same_owner = obj.data.borrow().owner == vic.data.borrow().owner;
-        if same_owner {
-            if !self.props.obj_has_property(vic, "flag", "TRUST", false, false) {
-                return true
-            }
-            if self.props.obj_has_property(obj, "flag", "TRUST", false, false) {
-                return true
-            }
-        }
-        let ply = self.props.get_property("obj_type", "PLAYER", false, false).unwrap();
-        if self.props.obj_has_property(vic, "flag", "TRUST", false, false) || vic.obj_type == ply {
-            return false
-        }
-
-        false
-    }
-
 }

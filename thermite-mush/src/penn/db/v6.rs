@@ -9,11 +9,7 @@ use std::{
 
 use super::{
     typedefs::{DbRef, Money, Timestamp},
-    core::{DbError, GameState},
-    attributes::{Attribute, AttributeData, AttributeFlag, AttributeFlagManager, AttributeManager},
-    flags::{Flag, FlagData, FlagPerm, FlagManager, FlagPermManager},
-    locks::{LockFlag, Lock},
-    objects::{Obj, ObjData, ObjType, ObjAttr, ObjManager}
+    core::{DbError, GameState}
 };
 
 use super::flatfile::{
@@ -68,61 +64,32 @@ fn _load_flag_aliases(data: &[FlatLine]) -> Result<HashMap<String, HashSet<Strin
     Ok(out)
 }
 
-fn _load_flag_single(mut manager: &mut FlagManager, mut perms: &mut FlagPermManager, mut objects: &mut ObjManager, data: &[FlatLine]) -> Result<Flag, Box<dyn Error>> {
+fn _load_flag_single(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, type_idx: usize) -> Result<usize, DbError> {
     let name = data[0].text("name", "Improperly formatted flag data")?;
+
+    let prop_idx = state.property_get_or_create(type_idx, &name);
+
     let letter = data[1].text("letter", "Improperly formatted flag data")?;
-
-    if letter.len() > 1 {
-        return Err(DbError::new("improperly formatted flag data: letter").into());
-    }
-    let letter = letter.chars().next();
-
-    let mut obj_types: HashSet<Rc<ObjType>> = Default::default();
+    state.property_set_letter(prop_idx, &letter)?;
 
     for name in data[2].text("type", "Improperly formatted flag data")?.split_ascii_whitespace() {
-        if let Some(t) = objects.get_obj_type(name) {
-            obj_types.insert(t);
-        } else {
-            return Err(DbError::new("Improper type in a flag").into())
-        }
+        // link the type here!
     }
 
-    let mut flag_perms: HashSet<Rc<FlagPerm>> = Default::default();
-
     for name in data[3].text("perms", "Improperly formatted flag data")?.split_ascii_whitespace() {
-        if let Some(t) = perms.get_flag_perm(name) {
-            flag_perms.insert(t);
-        } else {
-            return Err(DbError::new("Improper perm in a flag").into())
-        }
+        // link flag perms here!
     }
 
     let mut negate_perms: HashSet<Rc<FlagPerm>> = Default::default();
 
     for name in data[4].text("negate_perms", "improperly formatted flag data")?.split_ascii_whitespace() {
-        if let Some(t) = perms.get_flag_perm(name) {
-            negate_perms.insert(t);
-        } else {
-            return Err(DbError::new("Improper negate_perm in a flag").into())
-        }
+        // link negate perms here!
     }
 
-    let flag_mut = FlagData {
-        letter,
-        obj_types,
-        perms: flag_perms,
-        negate_perms,
-        aliases: Default::default(),
-        holders: Default::default()
-    };
-
-    Ok(Flag {
-        name: manager.interner.get_or_intern(name.to_uppercase().as_str()),
-        data: RefCell::new(flag_mut)
-    })
+    Ok((prop_idx))
 }
 
-fn _load_flags(mut manager: &mut FlagManager, mut perms: &mut FlagPermManager, mut objects: &mut ObjManager, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
+fn _load_flags(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, type_idx: usize) -> Result<(), DbError> {
     let mut alias_idx: usize = 0;
     let mut name_idx: Vec<usize> = Default::default();
 
@@ -143,27 +110,31 @@ fn _load_flags(mut manager: &mut FlagManager, mut perms: &mut FlagPermManager, m
 
     let mut aliases = _load_flag_aliases(&data[alias_idx..])?;
     for r in ranges {
-        let mut flag = _load_flag_single(manager, perms, objects,&data[r])?;
-        if let Some(aliaset) = aliases.remove(manager.interner.get(flag.name)) {
-            let mut fdat = flag.data.borrow_mut();
-            for alias in aliaset {
-                let idx = manager.interner.get_or_intern(alias.to_uppercase().as_str());
-                fdat.aliases.insert(idx);
-            };
+        let mut flag_idx = _load_flag_single(&mut state,&data[r], perm_idx, type_idx)?;
+    }
+
+    for (nm, aliases) in aliases {
+        if let Some(flag_idx) = state.property_find_name(type_idx, &nm) {
+            for alias in aliases {
+                state.property_add_alias(flag_idx, &alias)?;
+            }
         }
-        manager.load_flag(flag)?;
     }
 
     Ok(())
 }
 
-fn load_flags(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
-    _load_flags(&mut state.flags, &mut state.flag_perms, &mut state.objects, data)?;
+fn load_flags(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
+    let perm_idx = state.property_get_or_create_type("FLAG_PERM");
+    let type_idx = state.property_get_or_create_type("FLAG");
+    _load_flags(&mut state, data, perm_idx, type_idx)?;
     Ok(())
 }
 
-fn load_powers(state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
-    _load_flags(&mut state.powers, &mut state.flag_perms, &mut state.objects, data)?;
+fn load_powers(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
+    let perm_idx = state.property_get_or_create_type("FLAG_PERM");
+    let type_idx = state.property_get_or_create_type("POWER");
+    _load_flags(&mut state, data, perm_idx, type_idx)?;
     Ok(())
 }
 

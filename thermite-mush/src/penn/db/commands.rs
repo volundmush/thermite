@@ -2,7 +2,6 @@ use std::collections::{HashSet, HashMap};
 use std::rc::Rc;
 use super::{
     typedefs::DbRef,
-    props::{Property, PropertyData, PropertyManager}
 };
 
 #[derive(Debug, Clone)]
@@ -30,7 +29,6 @@ pub struct Command {
 
 #[derive(Debug, Default)]
 pub struct CommandManager {
-    pub internal_manager: PropertyManager,
     pub commands: HashMap<usize, Command>,
 
 }

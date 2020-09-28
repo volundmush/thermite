@@ -7,6 +7,7 @@ use super::{
 };
 
 // This should store the name that is to be 'displayed' - it is mixed case.
+#[derive(Debug)]
 pub struct InternString {
     pub row_id: usize,
     pub text: String
@@ -20,7 +21,7 @@ pub struct InternString {
 // A serialization and reboot should clean it up.
 
 // property names are not case sensitive.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Property {
     pub row_id: usize,
     pub property_type_id: usize,
@@ -51,6 +52,7 @@ impl Property {
 }
 
 // many properties have ALIASES. these are always uppercase.
+#[derive(Debug, Default)]
 pub struct Alias {
     pub row_id: usize,
     pub property_id: usize,
@@ -66,6 +68,7 @@ impl Alias {
     }
 }
 
+#[derive(Debug)]
 pub struct PropertyRelation {
     pub row_id: usize,
     pub property_id: usize,
@@ -75,6 +78,7 @@ pub struct PropertyRelation {
 }
 
 // An Object's DbRef doesn't necessarily have anything to do with its row ID
+#[derive(Debug)]
 pub struct Object {
     pub row_id: usize,
     pub deleted: bool,
@@ -95,6 +99,7 @@ pub struct Object {
 
 
 // This structure will map DbRefs to the appropriate row_id of Object.
+#[derive(Debug)]
 pub struct ObjectMap {
     pub row_id: usize,
     pub deleted: bool,
@@ -106,6 +111,7 @@ pub struct ObjectMap {
 // this struct maps an object with a property. this is for things like Flags and Powers.
 // IE: either the Object 'has' this thing or it does not. Property Type ID is included for
 // better indexing and lookups.
+#[derive(Debug)]
 pub struct ObjectPropertyRelation {
     pub row_id: usize,
     pub deleted: bool,
@@ -114,6 +120,7 @@ pub struct ObjectPropertyRelation {
     pub property_type_id: usize
 }
 
+#[derive(Debug)]
 pub struct ObjectDataRelation {
     pub row_id: usize,
     pub deleted: bool,

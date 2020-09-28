@@ -6,8 +6,7 @@ use std::{
 
 use super::{
     typedefs::{DbRef, Timestamp, Money},
-    core::DbError,
-    props::{Property, PropertyData, ObjProperty}
+    core::DbError
 };
 use std::hash::{Hash, Hasher};
 use std::borrow::Borrow;
