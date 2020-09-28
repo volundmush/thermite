@@ -1,6 +1,7 @@
 use std::{
-    collections::{HashSet, HashMap}
+    collections::{HashSet, HashMap},
 };
+
 
 use super::{
     typedefs::{Timestamp, DbRef, Money},
@@ -19,16 +20,7 @@ pub struct InternString {
 // Everything below this -can- be deleted and should be ignored while the game is running
 // A serialization and reboot should clean it up.
 
-pub struct Row<T> {
-    pub row_id: usize,
-    pub deleted: bool,
-    pub data: T
-}
 
-pub struct Table<T> {
-    pub storage: Vec<Row<T>>,
-    pub available: Vec<usize>
-}
 
 
 // property names are not case sensitive.
