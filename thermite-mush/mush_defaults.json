@@ -234,6 +234,107 @@
       "lsargs": {},
       "rsargs": {},
       "rsnoparse": {}
+    },
+    "lock": {
+      "basic": {
+        "system": true
+      },
+      "enter": {
+        "system": true
+      },
+      "teleport": {
+        "system": true
+      },
+      "use": {
+        "system": true
+      },
+      "page": {
+        "system": true
+      },
+      "zone": {
+        "system": true
+      },
+      "parent": {
+        "system": true
+      },
+      "link": {
+        "system": true
+      },
+      "open": {
+        "system": true
+      },
+      "mail": {
+        "system": true
+      },
+      "speech": {
+        "system": true
+      },
+      "listen": {
+        "system": true
+      },
+      "command": {
+        "system": true
+      },
+      "leave": {
+        "system": true
+      },
+      "drop": {
+        "system": true
+      },
+      "dropin": {
+        "system": true
+      },
+      "give": {
+        "system": true
+      },
+      "from": {
+        "system": true
+      },
+      "pay": {
+        "system": true
+      },
+      "receive": {
+        "system": true
+      },
+      "follow": {
+        "system": true
+      },
+      "examine": {
+        "system": true
+      },
+      "chzone": {
+        "system": true
+      },
+      "forward": {
+        "system": true
+      },
+      "filter": {
+        "system": true
+      },
+      "infilter": {
+        "system": true
+      },
+      "control": {
+        "system": true
+      },
+      "dropto": {
+        "system": true
+      },
+      "destroy": {
+        "system": true
+      },
+      "interact": {
+        "system": true
+      },
+      "take": {
+        "system": true
+      },
+      "mailforward": {
+        "system": true
+      },
+      "chown": {
+        "system": true
+      }
     }
   }
 }

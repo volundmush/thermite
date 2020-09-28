@@ -103,68 +103,60 @@ impl StringHolder {
     }
 }
 
-
 #[derive(Debug, Default)]
-pub struct GameState {
+pub struct PropertyManager {
     pub names: StringHolder,
-    pub uppers: StringHolder,
     pub lockkeys: StringHolder,
-    pub proptypes: StringHolder,
-    pub propnames: StringHolder,
-    pub properties: Vec<Property>,
-    pub propalias: Vec<Alias>,
-    pub proprelations: Vec<PropertyRelation>,
+    pub types: StringHolder,
+    pub contents: Vec<Property>,
+    pub aliases: Vec<Alias>,
     pub reltypes: StringHolder,
-    pub objects: Vec<Object>,
-    pub dbrefs: Vec<ObjectMap>,
+    pub relations: Vec<PropertyRelation>,
     pub objproprel: Vec<ObjectPropertyRelation>,
     pub objdatrel: Vec<ObjectDataRelation>,
-    pub objalias: Vec<Alias>
 }
 
-impl GameState {
-
-
-    pub fn property_find(&self, prop_type: usize, name_idx: usize) -> Option<usize> {
+impl PropertyManager {
+    pub fn find(&self, prop_type: usize, name_idx: usize) -> Option<usize> {
         // this will locate the row_id of a Property by its name or alias.
         if let Some(found) = self.properties.iter().find(|x| x.name_match(prop_type, name_idx)) {
             return Some(found.row_id)
         }
 
-        self.property_find_alias(prop_type, name_idx)
+        self.find_alias(prop_type, name_idx)
     }
 
-    pub fn property_find_alias(&self, prop_type: usize, name: usize) -> Option<usize> {
+    pub fn find_alias(&self, prop_type: usize, name: usize) -> Option<usize> {
         if let Some(found) = self.propalias.iter().find(|x| x.name_match(prop_type, name)) {
             return Some(found.property_id)
         }
         None
     }
 
-    pub fn property_find_name(&self, prop_type: usize, name: &str) -> Option<usize> {
+    pub fn find_name(&self, prop_type: usize, name: &str) -> Option<usize> {
         if let Some(name_idx) = self.propnames.find(name.to_uppercase().as_str()) {
-            return self.property_find(prop_type, name_idx)
+            return self.find(prop_type, name_idx)
         }
         None
     }
 
-    pub fn property_find_name_and_type(&self, type_name: &str, name: &str) -> Option<usize> {
+    pub fn find_name_and_type(&self, type_name: &str, name: &str) -> Option<usize> {
         // this works similarly to find, except it takes strings, and it will not create new entries.
         if let Some(type_idx) = self.proptypes.find(type_name.to_uppercase().as_str()) {
             if let Some(name_idx) = self.propnames.find(name.to_uppercase().as_str()) {
-                return self.property_find(type_idx, name_idx)
+                return self.find(type_idx, name_idx)
             }
         }
         None
     }
 
-    pub fn property_get_or_create_type(&mut self, type_name: &str) -> usize {
+    pub fn get_or_create_type(&mut self, type_name: &str) -> usize {
         self.proptypes.get_or_intern(type_name.to_uppercase())
     }
 
-    pub fn property_get_or_create(&mut self, type_idx: usize, name: &str) -> usize {
+    pub fn get_or_create(&mut self, type_idx: usize, name: &str) -> usize {
         let name_idx = self.propnames.get_or_intern(name.to_uppercase());
-        if let Some(i) = self.property_find(type_idx, name_idx) {
+        if let Some(i) = self.find(type_idx, name_idx) {
             return i
         }
         let mut prop = Property::default();
@@ -177,18 +169,21 @@ impl GameState {
     }
 
     // What it says on the tin. Note that this doesn't -initialize- a property properly, only creates it.
-    pub fn property_get_or_create_and_type(&mut self, type_name: &str, name: &str) -> usize {
+    pub fn get_or_create_and_type(&mut self, type_name: &str, name: &str) -> usize {
         // the row id of a proptypes is its existence. these names cannot change once loaded.
-        let type_idx = self.property_get_or_create_type(type_name);
-        self.property_get_or_create(type_idx, name)
+        let type_idx = self.get_or_create_type(type_name);
+        self.get_or_create(type_idx, name)
     }
 
-    pub fn property_add_alias(&mut self, prop_idx: usize, alias: &str) -> Result<(), DbError> {
-        // this will error if the alias already exists! It will not validate if an alias name is good!
+    pub fn add_alias(&mut self, prop_idx: usize, alias: &str) -> Result<(), DbError> {
+        // this will error if the alias already exists on another property!
+        // It will not validate if an alias name is good!
         let a_idx = self.propnames.get_or_intern(alias.to_uppercase());
         let type_idx = self.properties.get(prop_idx).unwrap().property_type_id;
-        if let Some(res) = self.property_find_alias(type_idx, a_idx) {
-            // return Err(DbError::new("alias already used"))
+        if let Some(res) = self.find_alias(type_idx, a_idx) {
+            if res != prop_idx {
+                return Err(DbError::new("alias already used"))
+            }
             Ok(())
         } else {
             let mut new_alias = Alias::default();
@@ -201,6 +196,47 @@ impl GameState {
         }
     }
 
+    pub fn set_letter(&mut self, prop_idx: usize, letter: &str) -> Result<(), DbError> {
+        // This performs no conflict checks because of some wonkiness in how Flags work...
+        match letter.len() {
+            0 => {
+                let mut prop = self.contents.get_mut(prop_idx).unwrap();
+                prop.letter = None;
+                Ok(())
+            },
+            1 => {
+                let mut prop = self.contents.get_mut(prop_idx).unwrap();
+                prop.letter = Some(letter.chars().next().unwrap());
+                Ok(())
+            }
+            _ => {
+                // Reject this.
+                Err(DbError::new("letters must be single characters"))
+            }
+        }
+    }
+
+    pub fn find_relation(&self, prop_idx: usize, relation: usize, with: usize) -> Option<usize> {
+        // returns the row_id of a PropertyRelation matching the description, if exists...
+    }
+
+    pub fn add_relation(&mut self, prop_idx: usize, relation: usize, with: usize) -> Result<(), DbError> {
+
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct GameState {
+    pub names: StringHolder,
+    pub uppers: StringHolder,
+    pub props: PropertyManager,
+    pub reltypes: StringHolder,
+    pub objects: Vec<Object>,
+    pub dbrefs: Vec<ObjectMap>,
+    pub objalias: Vec<Alias>
+}
+
+impl GameState {
 
     pub fn load_defaults(&mut self, data: &JV) -> Result<(), DbError> {
         if let JV::Object(dict) = data {
@@ -220,10 +256,10 @@ impl GameState {
     pub fn load_props(&mut self, data: &JV) -> Result<(), DbError> {
         if let JV::Object(sections) = data {
             for (prop_type_name, v) in sections {
-                let type_idx = self.property_get_or_create_type(prop_type_name);
+                let type_idx = self.props.get_or_create_type(prop_type_name);
                 if let JV::Object(props) = v {
                     for (propname, def) in props {
-                        let mut prop_idx = self.property_get_or_create(type_idx, propname);
+                        let mut prop_idx = self.props.get_or_create(type_idx, propname);
                         if let JV::Object(fields) = def {
 
                             // Aliases
@@ -231,7 +267,7 @@ impl GameState {
                                 if let JV::Array(alias_j_l) = alias_j {
                                     for ali_v in alias_j_l {
                                         if let JV::String(alias) = ali_v {
-                                            self.property_add_alias(prop_idx, alias)?;
+                                            self.props.add_alias(prop_idx, alias)?;
                                         } else {
                                             return Err(DbError::new("alias data must be an array of strings"));
                                         }
@@ -247,7 +283,7 @@ impl GameState {
                                     if letter.len() > 0 {
                                         if letter.len() == 1 {
                                             let letter = letter.chars().next().unwrap();
-                                            let mut prop = self.properties.get_mut(prop_idx).unwrap();
+                                            let mut prop = self.props.properties.get_mut(prop_idx).unwrap();
                                             prop.letter = Some(letter);
                                         }
                                     }

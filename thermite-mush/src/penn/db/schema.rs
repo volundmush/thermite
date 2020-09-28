@@ -6,7 +6,6 @@ use super::{
     typedefs::{Timestamp, DbRef, Money},
 };
 
-// This should store the name that is to be 'displayed' - it is mixed case.
 #[derive(Debug)]
 pub struct InternString {
     pub row_id: usize,
@@ -19,6 +18,18 @@ pub struct InternString {
 
 // Everything below this -can- be deleted and should be ignored while the game is running
 // A serialization and reboot should clean it up.
+
+pub struct Row<T> {
+    pub row_id: usize,
+    pub deleted: bool,
+    pub data: T
+}
+
+pub struct Table<T> {
+    pub storage: Vec<Row<T>>,
+    pub available: Vec<usize>
+}
+
 
 // property names are not case sensitive.
 #[derive(Debug, Default)]
@@ -42,7 +53,9 @@ pub struct Property {
     // some properties are represented by a single character. Some aren't.
     pub letter: Option<char>,
 
-    pub owner: DbRef
+    pub owner: DbRef,
+
+    pub data: String
 }
 
 impl Property {
