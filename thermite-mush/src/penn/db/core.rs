@@ -14,6 +14,8 @@ use serde_json;
 use serde_json::Value as JV;
 use serde_derive;
 
+use generational_arena::{Arena, Index};
+
 use super::{
     functions::{FunctionManager},
     commands::{CommandManager},
@@ -108,42 +110,42 @@ pub struct PropertyManager {
     pub names: StringHolder,
     pub lockkeys: StringHolder,
     pub types: StringHolder,
-    pub contents: Vec<Property>,
-    pub aliases: Vec<Alias>,
+    pub contents: Arena<Property>,
+    pub aliases: Arena<Alias>,
     pub reltypes: StringHolder,
-    pub relations: Vec<PropertyRelation>,
-    pub objproprel: Vec<ObjectPropertyRelation>,
-    pub objdatrel: Vec<ObjectDataRelation>,
+    pub relations: Arena<PropertyRelation>,
+    pub objproprel: Arena<ObjectPropertyRelation>,
+    pub objdatrel: Arena<ObjectDataRelation>,
 }
 
 impl PropertyManager {
-    pub fn find(&self, prop_type: usize, name_idx: usize) -> Option<usize> {
+    pub fn find(&self, prop_type: usize, name_idx: usize) -> Option<Index> {
         // this will locate the row_id of a Property by its name or alias.
-        if let Some(found) = self.properties.iter().find(|x| x.name_match(prop_type, name_idx)) {
-            return Some(found.row_id)
+        if let Some((i, found)) = self.contents.iter().find(|(i, x)| x.name_match(prop_type, name_idx)) {
+            return Some(i)
         }
 
         self.find_alias(prop_type, name_idx)
     }
 
-    pub fn find_alias(&self, prop_type: usize, name: usize) -> Option<usize> {
-        if let Some(found) = self.propalias.iter().find(|x| x.name_match(prop_type, name)) {
+    pub fn find_alias(&self, prop_type: usize, name: usize) -> Option<Index> {
+        if let Some((i, found)) = self.aliases.iter().find(|(i, x) | x.name_match(prop_type, name)) {
             return Some(found.property_id)
         }
         None
     }
 
-    pub fn find_name(&self, prop_type: usize, name: &str) -> Option<usize> {
-        if let Some(name_idx) = self.propnames.find(name.to_uppercase().as_str()) {
+    pub fn find_name(&self, prop_type: usize, name: &str) -> Option<Index> {
+        if let Some(name_idx) = self.names.find(name.to_uppercase().as_str()) {
             return self.find(prop_type, name_idx)
         }
         None
     }
 
-    pub fn find_name_and_type(&self, type_name: &str, name: &str) -> Option<usize> {
+    pub fn find_name_and_type(&self, type_name: &str, name: &str) -> Option<Index> {
         // this works similarly to find, except it takes strings, and it will not create new entries.
-        if let Some(type_idx) = self.proptypes.find(type_name.to_uppercase().as_str()) {
-            if let Some(name_idx) = self.propnames.find(name.to_uppercase().as_str()) {
+        if let Some(type_idx) = self.types.find(type_name.to_uppercase().as_str()) {
+            if let Some(name_idx) = self.names.find(name.to_uppercase().as_str()) {
                 return self.find(type_idx, name_idx)
             }
         }
@@ -151,35 +153,31 @@ impl PropertyManager {
     }
 
     pub fn get_or_create_type(&mut self, type_name: &str) -> usize {
-        self.proptypes.get_or_intern(type_name.to_uppercase())
+        self.types.get_or_intern(type_name.to_uppercase())
     }
 
-    pub fn get_or_create(&mut self, type_idx: usize, name: &str) -> usize {
-        let name_idx = self.propnames.get_or_intern(name.to_uppercase());
+    pub fn get_or_create(&mut self, type_idx: usize, name: &str) -> Index {
+        let name_idx = self.names.get_or_intern(name.to_uppercase());
         if let Some(i) = self.find(type_idx, name_idx) {
             return i
         }
         let mut prop = Property::default();
-        let prop_idx = self.properties.len();
         prop.name_id = name_idx;
-        prop.property_type_id = type_idx;
-        prop.row_id = prop_idx;
-        self.properties.push(prop);
-        prop_idx
+        prop.property_type = type_idx;
+        self.contents.insert(prop)
     }
 
     // What it says on the tin. Note that this doesn't -initialize- a property properly, only creates it.
-    pub fn get_or_create_and_type(&mut self, type_name: &str, name: &str) -> usize {
+    pub fn get_or_create_and_type(&mut self, type_name: &str, name: &str) -> Index {
         // the row id of a proptypes is its existence. these names cannot change once loaded.
-        let type_idx = self.get_or_create_type(type_name);
-        self.get_or_create(type_idx, name)
+        self.get_or_create(self.get_or_create_type(type_name), name)
     }
 
-    pub fn add_alias(&mut self, prop_idx: usize, alias: &str) -> Result<(), DbError> {
+    pub fn add_alias(&mut self, prop_idx: Index, alias: &str) -> Result<(), DbError> {
         // this will error if the alias already exists on another property!
         // It will not validate if an alias name is good!
-        let a_idx = self.propnames.get_or_intern(alias.to_uppercase());
-        let type_idx = self.properties.get(prop_idx).unwrap().property_type_id;
+        let a_idx = self.names.get_or_intern(alias.to_uppercase());
+        let type_idx = self.contents.get(prop_idx).unwrap().property_type;
         if let Some(res) = self.find_alias(type_idx, a_idx) {
             if res != prop_idx {
                 return Err(DbError::new("alias already used"))
@@ -190,25 +188,28 @@ impl PropertyManager {
             new_alias.row_id = self.propalias.len();
             new_alias.property_id = prop_idx;
             new_alias.name_id = a_idx;
-            new_alias.property_type_id = type_idx;
-            self.propalias.push(new_alias);
+            new_alias.property_type = type_idx;
+            self.aliases.insert(new_alias);
             Ok(())
         }
     }
 
-    pub fn set_letter(&mut self, prop_idx: usize, letter: &str) -> Result<(), DbError> {
+    pub fn set_letter(&mut self, prop_idx: Index, letter: &str) -> Result<(), DbError> {
         // This performs no conflict checks because of some wonkiness in how Flags work...
-        match letter.len() {
-            0 => {
-                let mut prop = self.contents.get_mut(prop_idx).unwrap();
-                prop.letter = None;
-                Ok(())
+        let len = letter.len();
+        match len {
+            0 | 1 => {
+                if let Some(prop) = self.contents.get_mut(prop_idx) {
+                    if len == 0 {
+                        prop.letter = None
+                    } else {
+                        prop.letter = Some(letter.chars().next().unwrap());
+                    }
+                    Ok(())
+                } else {
+                    Err(DbError::new("property not found"))
+                }
             },
-            1 => {
-                let mut prop = self.contents.get_mut(prop_idx).unwrap();
-                prop.letter = Some(letter.chars().next().unwrap());
-                Ok(())
-            }
             _ => {
                 // Reject this.
                 Err(DbError::new("letters must be single characters"))
@@ -231,9 +232,9 @@ pub struct GameState {
     pub uppers: StringHolder,
     pub props: PropertyManager,
     pub reltypes: StringHolder,
-    pub objects: Vec<Object>,
-    pub dbrefs: Vec<ObjectMap>,
-    pub objalias: Vec<Alias>
+    pub objects: Arena<Object>,
+    pub dbrefs: HashMap<DbRef, Index>,
+    pub objalias: Arena<Alias>
 }
 
 impl GameState {

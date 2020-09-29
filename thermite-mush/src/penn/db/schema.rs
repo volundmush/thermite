@@ -7,6 +7,8 @@ use super::{
     typedefs::{Timestamp, DbRef, Money},
 };
 
+use generational_arena::Index;
+
 #[derive(Debug)]
 pub struct InternString {
     pub row_id: usize,
@@ -26,9 +28,7 @@ pub struct InternString {
 // property names are not case sensitive.
 #[derive(Debug, Default)]
 pub struct Property {
-    pub row_id: usize,
-    pub property_type_id: usize,
-    pub deleted: bool,
+    pub property_type: usize,
     pub name_id: usize,
     // the perms are LockKeys
     pub see_perms: usize,
@@ -59,34 +59,28 @@ impl Property {
 // many properties have ALIASES. these are always uppercase.
 #[derive(Debug, Default)]
 pub struct Alias {
-    pub row_id: usize,
-    pub property_id: usize,
-    pub property_type_id: usize,
-    pub deleted: bool,
+    pub property_id: Index,
+    pub property_type: usize,
     pub name_id: usize,
     pub upper_id: usize
 }
 
 impl Alias {
     pub fn name_match(&self, type_id: usize, name_id: usize) -> bool {
-        !self.deleted && self.property_type_id == type_id && self.name_id == name_id
+        !self.deleted && self.property_type == type_id && self.name_id == name_id
     }
 }
 
 #[derive(Debug)]
 pub struct PropertyRelation {
-    pub row_id: usize,
     pub property_id: usize,
     pub relation_type_id: usize,
-    pub deleted: bool,
     pub other_id: usize
 }
 
 // An Object's DbRef doesn't necessarily have anything to do with its row ID
 #[derive(Debug)]
 pub struct Object {
-    pub row_id: usize,
-    pub deleted: bool,
     pub dbref: DbRef,
     // obj_type is always a property_id. if deleted, this is to be ignored.
     pub obj_type: usize,
@@ -103,23 +97,11 @@ pub struct Object {
 }
 
 
-// This structure will map DbRefs to the appropriate row_id of Object.
-#[derive(Debug)]
-pub struct ObjectMap {
-    pub row_id: usize,
-    pub deleted: bool,
-    pub dbref: DbRef,
-    pub object_id: usize,
-    pub obj_type: usize,
-}
-
 // this struct maps an object with a property. this is for things like Flags and Powers.
 // IE: either the Object 'has' this thing or it does not. Property Type ID is included for
 // better indexing and lookups.
 #[derive(Debug)]
 pub struct ObjectPropertyRelation {
-    pub row_id: usize,
-    pub deleted: bool,
     pub object_id: usize,
     pub property_id: usize,
     pub property_type_id: usize
@@ -127,8 +109,6 @@ pub struct ObjectPropertyRelation {
 
 #[derive(Debug)]
 pub struct ObjectDataRelation {
-    pub row_id: usize,
-    pub deleted: bool,
     pub object_id: usize,
     pub relation_id: usize,
     pub owner: DbRef,
