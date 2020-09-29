@@ -9,16 +9,17 @@ use std::{
 
 use super::{
     typedefs::{DbRef, Money, Timestamp},
-    core::{DbError, GameState}
+    core::{DbError, GameState},
+    flatfile::{
+        FlatFileReader,
+        FlatFileSplitter,
+        FlatLine,
+        FlatValueNode,
+        NodeValue,
+    }
 };
 
-use super::flatfile::{
-    FlatFileReader,
-    FlatFileSplitter,
-    FlatLine,
-    FlatValueNode,
-    NodeValue,
-};
+use generational_arena::{Index, Arena};
 
 use thermite_util::{
     text::StringInterner
@@ -52,7 +53,7 @@ fn _load_flag_aliases(mut state: &mut GameState, data: &[FlatLine], type_idx: us
     Ok(())
 }
 
-fn _load_flag_single(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, type_idx: usize) -> Result<usize, DbError> {
+fn _load_flag_single(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, type_idx: usize) -> Result<Index, DbError> {
     let prop_idx = state.props.get_or_create(type_idx, &data[0].text("name", "Improperly formatted flag data")?);
     state.props.set_letter(prop_idx, &data[1].text("letter", "Improperly formatted flag data")?)?;
 
@@ -68,7 +69,7 @@ fn _load_flag_single(mut state: &mut GameState, data: &[FlatLine], perm_idx: usi
         // link negate perms here!
     }
 
-    Ok((prop_idx))
+    Ok(prop_idx)
 }
 
 fn _load_flags(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, type_idx: usize) -> Result<(), DbError> {
@@ -111,7 +112,7 @@ fn load_powers(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), DbErr
     Ok(())
 }
 
-fn _load_attr_single(mut state: &mut GameState, data: &[FlatLine], attr_idx: usize, flag_idx: usize) -> Result<usize, DbError> {
+fn _load_attr_single(mut state: &mut GameState, data: &[FlatLine], attr_idx: usize, flag_idx: usize) -> Result<Index, DbError> {
     let name = data[0].text("name", "Improperly formatted attribute data")?;
     let name_idx = state.props.get_or_create(attr_idx, &name);
 
@@ -153,7 +154,7 @@ fn load_attributes(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), B
     Ok(())
 }
 
-fn _load_obj_lock(mut state: &mut GameState, data: &[FlatLine], lock_idx: usize, flag_idx: usize, obj_idx: usize) -> Result<(), DbError> {
+fn _load_obj_lock(mut state: &mut GameState, data: &[FlatLine], lock_idx: usize, flag_idx: usize, obj_idx: Index) -> Result<(), DbError> {
     let name = data[0].text("type", "invalid lock data")?.to_lowercase();
     let creator = data[1].dbref("creator", "invalid lock data")?;
     let flag_data = data[2].text("flags", "invalid lock data")?;
@@ -168,7 +169,7 @@ fn _load_obj_lock(mut state: &mut GameState, data: &[FlatLine], lock_idx: usize,
     Ok(())
 }
 
-fn _load_obj_locks(mut state: &mut GameState, data: &[FlatLine], mut obj_data: &mut ObjData) -> Result<(), Box<dyn Error>> {
+fn _load_obj_locks(mut state: &mut GameState, data: &[FlatLine], lock_idx: usize, flag_idx: usize, obj_idx: Index) -> Result<(), Box<dyn Error>> {
     for ldata in data[1..].chunks(5) {
         let (name, lock) = _load_obj_lock(&mut state, ldata)?;
         let idx = state.locks.type_interner.get_or_intern(name.as_str());
