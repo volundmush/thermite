@@ -24,6 +24,30 @@ impl DbRef {
             Self::Name(r) => r.to_string()
         }
     }
+
+    pub fn is_num(&self) -> bool {
+        match self {
+            Self::None => false,
+            Self::Name(r) => false,
+            Self::Num(n) => true
+        }
+    }
+
+    pub fn is_name(&self) -> bool {
+        match self {
+            Self::None => false,
+            Self::Name(r) => true,
+            Self::Num(n) => false
+        }
+    }
+
+    pub fn to_num(&self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Name(r) => 0,
+            Self::Num(n) => *n
+        }
+    }
 }
 
 impl Display for DbRef {
@@ -35,5 +59,11 @@ impl Display for DbRef {
 impl Default for DbRef {
     fn default() -> Self {
         Self::None
+    }
+}
+
+impl From<usize> for DbRef {
+    fn from(src: usize) -> Self {
+        DbRef::Num(src)
     }
 }

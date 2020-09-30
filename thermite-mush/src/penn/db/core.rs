@@ -226,6 +226,35 @@ impl PropertyManager {
     }
 }
 
+#[derive(Default)]
+pub struct DbNumManager {
+    pub greatest: usize,
+    pub available: Vec<usize>,
+}
+
+impl DbNumManager {
+    pub fn init(&mut self, obj: &Arena<Object>) {
+        for (i, o) in obj.iter().filter(|(i, o)| o.dbref.is_num()) {
+            let n = o.dbref.to_num();
+            if o > self.greatest {
+                self.greatest = n;
+            }
+        }
+    }
+
+    pub fn scan_recycle(&mut self, dbrefs: &HashMap<DbRef, Index>) {
+        for i in 0..self.greatest {
+            let db = DbRef::from(i);
+            if !dbrefs.contains_key(&db) {
+                self.available.push(i);
+                if self.available.len() > 50 {
+                    break
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct GameState {
     pub names: StringHolder,

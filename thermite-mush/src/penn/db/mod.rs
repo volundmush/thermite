@@ -5,3 +5,4 @@ pub mod functions;
 pub mod commands;
 pub mod typedefs;
 pub mod schema;
+pub mod components;
