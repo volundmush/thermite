@@ -336,4 +336,8 @@ impl GameState {
         }
         Ok(())
     }
+
+    pub fn obj_get_or_create(&mut self, db: DbRef, name: &str, type_idx: Index) -> Result<DbRef, DbError> {
+
+    }
 }
