@@ -2,12 +2,12 @@ use std::{
     collections::{HashSet, HashMap},
 };
 
-
 use super::{
     typedefs::{Timestamp, DbRef, Money},
 };
 
 use generational_arena::Index;
+use legion::*;
 
 #[derive(Debug)]
 pub struct InternString {
@@ -44,9 +44,8 @@ pub struct Property {
     pub internal: bool,
     // some properties are represented by a single character. Some aren't.
     pub letter: Option<char>,
-
     pub owner: DbRef,
-
+    pub holders: HashSet<Entity>,
     pub data: String
 }
 
@@ -75,43 +74,27 @@ impl Alias {
 pub struct PropertyRelation {
     pub property_id: usize,
     pub relation_type_id: usize,
-    pub other_id: usize
+    pub other_id: usize,
+    pub other_type_id: usize
 }
-
-// An Object's DbRef doesn't necessarily have anything to do with its row ID
-#[derive(Debug)]
-pub struct Object {
-    pub dbref: DbRef,
-    // obj_type is always a property_id. if deleted, this is to be ignored.
-    pub obj_type: usize,
-    pub name_id: usize,
-    pub upper_id: usize,
-    pub creation_timestamp: Timestamp,
-    pub modification_timestamp: Timestamp,
-    pub money: Money,
-    pub parent: DbRef,
-    pub zone: DbRef,
-    pub owner: DbRef,
-    // Destination is used purely by exits.
-    pub destination: DbRef
-}
-
 
 // this struct maps an object with a property. this is for things like Flags and Powers.
 // IE: either the Object 'has' this thing or it does not. Property Type ID is included for
 // better indexing and lookups.
 #[derive(Debug)]
 pub struct ObjectPropertyRelation {
-    pub object_id: usize,
-    pub property_id: usize,
-    pub property_type_id: usize
+    pub object_id: Entity,
+    pub property_id: Index,
+    pub property_type_id: usize,
+    pub owner: DbRef,
+    pub props: HashSet<Index>,
+    pub value: String
 }
 
 #[derive(Debug)]
-pub struct ObjectDataRelation {
-    pub object_id: usize,
-    pub relation_id: usize,
-    pub owner: DbRef,
-    pub props: HashSet<usize>,
-    pub value: String
+pub struct ObjAlias {
+    pub object_id: Entity,
+    pub object_type_id: usize,
+    pub name_id: usize,
+    pub upper_id: usize
 }

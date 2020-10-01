@@ -15,4 +15,5 @@ encoding_rs = "0.8"
 encoding_rs_io = "0.1"
 thermite-util = {version = "0.1", path = "../thermite-util"}
 generational-arena = "0.2"
-specs = "0.16"
+legion = "0.3"
+lasso = {version = "0.3", features = ["serialize"]}

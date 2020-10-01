@@ -6,7 +6,8 @@ use std::{
     fmt::{Display, Formatter},
     path::Path,
     io::{Read, BufRead, BufReader},
-    fs::{File}
+    fs::{File},
+    cmp::max
 };
 
 use serde::Deserialize;
@@ -14,21 +15,20 @@ use serde_json;
 use serde_json::Value as JV;
 use serde_derive;
 
+use legion::*;
 use generational_arena::{Arena, Index};
 
 use super::{
     functions::{FunctionManager},
     commands::{CommandManager},
-    typedefs::{DbRef, Money, Timestamp},
+    typedefs::{DbRef, Money, Timestamp, ObjType},
     schema::{
         InternString,
         Property,
         Alias,
         PropertyRelation,
-        Object,
-        ObjectMap,
         ObjectPropertyRelation,
-        ObjectDataRelation
+        ObjAlias
     }
 };
 
@@ -115,7 +115,6 @@ pub struct PropertyManager {
     pub reltypes: StringHolder,
     pub relations: Arena<PropertyRelation>,
     pub objproprel: Arena<ObjectPropertyRelation>,
-    pub objdatrel: Arena<ObjectDataRelation>,
 }
 
 impl PropertyManager {
@@ -224,6 +223,36 @@ impl PropertyManager {
     pub fn add_relation(&mut self, prop_idx: usize, relation: usize, with: usize) -> Result<(), DbError> {
 
     }
+
+    pub fn obj_delete(&mut self, obj: Entity, db: DbRef) -> Result<(), DbError> {
+        let mut holders: Vec<Index> = Default::default();
+        let mut holder_props: Vec<Index> = Default::default();
+
+        for (i, x) in self.objproprel.iter_mut() {
+            if x.object_id = obj {
+                holders.push(i);
+                holder_props.push(x.property_id);
+            } else {
+                if x.owner == db {
+                    x.owner = DbRef::None
+                }
+            }
+        }
+        for idx in found {
+            self.objproprel.remove(idx)
+        }
+
+        for i in holder_props {
+            if let Some(x) = self.contents.get_mut(i) {
+                x.owner = DbRef::None;
+                let _ = x.holders.remove(&obj);
+            }
+        }
+
+
+
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -233,16 +262,13 @@ pub struct DbNumManager {
 }
 
 impl DbNumManager {
-    pub fn init(&mut self, obj: &Arena<Object>) {
-        for (i, o) in obj.iter().filter(|(i, o)| o.dbref.is_num()) {
-            let n = o.dbref.to_num();
-            if o > self.greatest {
-                self.greatest = n;
-            }
+    pub fn init(&mut self, obj: &HashMap<DbRef, Entity>) {
+        for (i, o) in obj.iter().filter(|(i, o)| i.dbref.is_num()) {
+            self.greatest = cmp(self.greatest, i.dbref.to_num());
         }
     }
 
-    pub fn scan_recycle(&mut self, dbrefs: &HashMap<DbRef, Index>) {
+    pub fn scan_recycle(&mut self, dbrefs: &HashMap<DbRef, Entity>) {
         for i in 0..self.greatest {
             let db = DbRef::from(i);
             if !dbrefs.contains_key(&db) {
@@ -253,7 +279,42 @@ impl DbNumManager {
             }
         }
     }
+
+    pub fn first_available(&mut self, dbrefs: &HashMap<DbRef, Entity>) -> DbRef {
+        if let Some(avail) = self.available.pop() {
+            DbRef::from(avail)
+        } else {
+            self.scan_recycle(&dbrefs);
+            if let Some(avail) = self.available.pop() {
+                DbRef::from(avail)
+            } else {
+                DbRef::from(self.greatest + 1)
+            }
+        }
+    }
+
+    pub fn create(&mut self, dbrefs: &HashMap<DbRef, Entity>, choice: DbRef) -> Result<DbRef, DbError> {
+        // given a Dbref, return a valid DbRef to use or Error. If given a SPECIFIC DbRef, it is
+        // available if it is not taken and is <= Greatest. Given a DbRef::None, pick the first available.
+
+        if dbrefs.contains_key(&choice) {
+            return Err(DbError::new("dbref already in use"))
+        }
+
+        match choice {
+            DbRef::None => Ok(self.first_available(&dbrefs)),
+            DbRef::Num(n) => {
+                if n > self.greatest {
+                    return Err(DbError::new("dbref higher than highest used"))
+                } else {
+                    Ok(choice)
+                }
+            },
+            DbRef::Name(usize) => Ok(choice)
+        }
+    }
 }
+
 
 #[derive(Debug, Default)]
 pub struct GameState {
@@ -261,9 +322,9 @@ pub struct GameState {
     pub uppers: StringHolder,
     pub props: PropertyManager,
     pub reltypes: StringHolder,
-    pub objects: Arena<Object>,
-    pub dbrefs: HashMap<DbRef, Index>,
-    pub objalias: Arena<Alias>
+    pub dbnums: DbNumManager,
+    pub dbrefs: HashMap<DbRef, Entity>,
+    pub objalias: Arena<ObjAlias>
 }
 
 impl GameState {
@@ -366,7 +427,52 @@ impl GameState {
         Ok(())
     }
 
-    pub fn obj_get_or_create(&mut self, db: DbRef, name: &str, type_idx: Index) -> Result<DbRef, DbError> {
+    pub fn obj_create_valid(&mut self, db: DbRef, name: &str, type_idx: Index) -> Result<DbRef, DbError> {
+        // Performs the deepest level of object creation - name conflict checking, type checking, and DbRef availability.
+        // if DbRef is DbRef::None, will automatically choose a DbRef.
+        // However, nothing is written to database / game state. This merely validates.
+        if type_idx == self.props.get_or_create_and_type("OBJ_TYPE", "PLAYER") {
+            // Must do a name validation on possible Players.
+        }
+        // Even if names check out, the given DbRef must be figured out or chosen. If so, this is a
+        // valid combination...
+        Ok(self.dbnums.create(&self.dbrefs, db)?)
+    }
 
+    pub fn obj_delete(&mut self, db: DbRef) -> Result<(), DbError> {
+        if let Some(idx) = self.dbrefs.remove(&db) {
+            self.props.obj_delete(idx, db)?;
+
+            let found = self.objalias.iter().filter(|(i, x)| x.object_id == idx).map(|(i, x)| i).collect_vec();
+            for i in found {
+                self.objalias.remove(i);
+            }
+
+            Ok(())
+        } else {
+            return Err(DbError::new("object does not exist"))
+        }
+    }
+}
+
+
+pub struct GameUniverse {
+    pub world: World,
+    pub resources: Resources,
+    pub schedule: Schedule
+}
+
+impl Default for GameUniverse {
+    fn default() -> Self {
+        let mut schedule = Schedule::builder().build();
+
+        let mut uni = Self {
+            world: Default::default(),
+            resources: Default::default(),
+            schedule
+        };
+
+
+        uni
     }
 }
