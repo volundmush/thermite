@@ -6,3 +6,4 @@ pub mod commands;
 pub mod typedefs;
 pub mod schema;
 pub mod components;
+pub mod queries;
