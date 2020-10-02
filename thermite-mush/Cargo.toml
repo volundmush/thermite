@@ -14,6 +14,5 @@ regex = "1.3"
 encoding_rs = "0.8"
 encoding_rs_io = "0.1"
 thermite-util = {version = "0.1", path = "../thermite-util"}
-generational-arena = "0.2"
 legion = "0.3"
 lasso = {version = "0.3", features = ["serialize"]}

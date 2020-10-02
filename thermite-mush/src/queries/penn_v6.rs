@@ -255,7 +255,7 @@ fn load_objects(mut world: &mut World, data: &[FlatLine], start: usize, index: &
     Ok(())
 }
 
-pub fn read_v6(mut data: impl Read, world: &mut World) -> Result<(), Box<dyn Error>> {
+pub fn read_v6(world: &mut World, mut data: impl Read) -> Result<(), Box<dyn Error>> {
     // PennMUSH's v6 flatfile is encoded in latin1 which is a subset of WINDOWS_1252.
 
     let mut decoder = DecodeReaderBytesBuilder::new().encoding(Some(encoding_rs::WINDOWS_1252)).build(data);
