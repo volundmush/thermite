@@ -1,12 +1,10 @@
 use std::{
     rc::Rc,
-    fmt::{Display, Formatter, Error},
-    convert::{TryFrom}
+    fmt::{Display, Formatter},
+    convert::{TryFrom},
+    error::Error
 };
 
-use super::{
-    core::{DbError}
-};
 
 pub type Timestamp = isize;
 pub type Money = isize;
@@ -16,7 +14,7 @@ pub type Money = isize;
 pub enum DbRef {
     None,
     Num(usize),
-    Name(usize)
+    Name(String)
 }
 
 impl DbRef {
@@ -73,51 +71,52 @@ impl From<usize> for DbRef {
     }
 }
 
-
-
-pub enum ObjType {
-    Player,
-    Room,
-    Thing,
-    Exit
+impl From<String> for DbRef {
+    fn from(src: String) -> Self {DbRef::Name(src.to_uppercase())}
 }
 
-impl TryFrom<isize> for ObjType {
-    type Error = DbError;
 
-    fn try_from(value: isize) -> Result<Self, Self::Error> {
-        match value {
-            8 => Ok(Self::Player),
-            4 => Ok(Self::Exit),
-            2 => Ok(Self::Thing),
-            1 => Ok(Self::Room),
-            _ => Err(DbError::new("invalid serialization for ObjectType"))
+#[derive(Debug)]
+pub struct DbError {
+    data: String
+}
+
+impl Display for DbError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!( f, "{}", self.data)
+    }
+}
+
+impl DbError {
+    pub fn new(src: &str) -> Self {
+        Self {
+            data: src.to_string()
         }
     }
 }
 
-impl TryFrom<char> for ObjType {
-    type Error = DbError;
-
-    fn try_from(value: char) -> Result<Self, Self::Error> {
-        match value.to_ascii_uppercase() {
-            'P' => Ok(Self::Player),
-            'E' => Ok(Self::Exit),
-            'T' => Ok(Self::Thing),
-            'R' => Ok(Self::Room),
-            _ => Err(DbError::new("invalid serialization for ObjectType"))
+impl From<&str> for DbError {
+    fn from(src: &str) -> Self {
+        Self {
+            data: src.to_string()
         }
     }
 }
 
-impl TryFrom<String> for ObjType {
-    type Error = DbError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.len() != 1 {
-            Err(DbError::new("invalid serialization for ObjectType"))
-        } else {
-            Self::try_from(value.chars().next().unwrap())
+impl From<String> for DbError {
+    fn from(src: String) -> Self {
+        Self {
+            data: src
         }
     }
 }
+impl Error for DbError {}
+
+
+pub enum DbAddr {
+    None,
+    Ref(DbRef),
+    Objid(usize, Timestamp)
+}
+
+// #TODO: Implement TryFrom<String> for DbAddr

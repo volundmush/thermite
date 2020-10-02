@@ -1,6 +1,5 @@
-use super::{
-    core::DbError,
-    typedefs::DbRef
+use crate::{
+    softcode::typedefs::{DbRef, DbError}
 };
 
 use std::{
@@ -227,7 +226,7 @@ impl FlatLine {
                         NodeValue::Db(t) => {
                             Ok(t.clone())
                         },
-                        NodeValue::Text(s) => Ok(DbRef::Name(Rc::from(s.clone()))),
+                        NodeValue::Text(s) => Ok(DbRef::Name(s.to_uppercase())),
                         _ => {
                             return Err(DbError::new(format!("{}: {}", err, name).as_str()).into());
                         }

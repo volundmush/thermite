@@ -1736,6 +1736,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "thermite-test"
+version = "0.1.0"
+dependencies = [
+ "legion",
+]
+
+[[package]]
 name = "thermite-util"
 version = "0.1.0"
 dependencies = [

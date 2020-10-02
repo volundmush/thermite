@@ -3,76 +3,71 @@ use std::{
     error::Error,
     collections::{HashMap, HashSet},
     ops::Range,
-    rc::Rc,
-    cell::RefCell
 };
 
-use super::{
-    typedefs::{DbRef, Money, Timestamp},
-    core::{DbError, GameState},
-    flatfile::{
-        FlatFileReader,
-        FlatFileSplitter,
-        FlatLine,
-        FlatValueNode,
-        NodeValue,
-    }
-};
-
-use generational_arena::{Index, Arena};
-
-use thermite_util::{
-    text::StringInterner
-};
+use legion::*;
+use legion::storage::Component;
 
 use encoding_rs::*;
 use encoding_rs_io::*;
 
+use crate::{
+    softcode::typedefs::{Timestamp, Money, DbError, DbRef},
+    components::{
+        props::*
+    },
+    db::flatfile::*,
+    queries::{
+        props,
+        obj
+    }
+};
 
-fn load_version(state: &mut GameState, data: &[FlatLine]) -> Result<(), DbError> {
+fn load_version(world: &mut World, data: &[FlatLine]) -> Result<(), DbError> {
 
     Ok(())
 }
 
-fn _load_flag_alias(mut state: &mut GameState, data: &[FlatLine], type_idx: usize) -> Result<(), DbError> {
-    let name_idx = state.props.get_or_create(type_idx, &data[0].text("name", "Improperly formmatted flag alias")?);
+fn _load_flag_alias<T: Component + Default>(mut world: &mut World, data: &[FlatLine]) -> Result<(), DbError> {
+    let flag_ent = props::get_or_create::<T>(world,&data[0].text("name", "Improperly formmatted flag alias")?.to_uppercase());
 
     for line in &data[1..] {
-        state.props.add_alias(name_idx, &line.text("alias", "improperly formatted flag alias")?);
+        //state.props.add_alias(name_idx, &line.text("alias", "improperly formatted flag alias")?);
     }
     Ok(())
 }
 
-fn _load_flag_aliases(mut state: &mut GameState, data: &[FlatLine], type_idx: usize) -> Result<(), DbError> {
+fn _load_flag_aliases<T: Component + Default>(mut world: &mut World, data: &[FlatLine]) -> Result<(), DbError> {
     let mut name_idx: Vec<usize> = data.iter().enumerate().filter(|(i, x)| x.depth() == 1).map(|(i, x)| i).collect();
     name_idx.push(data.len()+1);
     let mut ranges: Vec<Range<usize>> = name_idx.as_slice().windows(2).map(|x| x[0]..x[1]-1).collect();
     for r in ranges {
-        _load_flag_alias(&mut state, &data[r], type_idx)?;
+        _load_flag_alias::<T>(&mut world, &data[r])?;
     }
     Ok(())
 }
 
-fn _load_flag_single(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, type_idx: usize) -> Result<Index, DbError> {
-    let prop_idx = state.props.get_or_create(type_idx, &data[0].text("name", "Improperly formatted flag data")?);
-    state.props.set_letter(prop_idx, &data[1].text("letter", "Improperly formatted flag data")?)?;
+fn _load_flag_single<T: Component + Default>(mut world: &mut World, data: &[FlatLine]) -> Result<Entity, DbError> {
+    let flag_ent = props::get_or_create::<T>(world,&data[0].text("name", "Improperly formatted flag data")?.to_uppercase());
+
+    //state.props.set_letter(prop_idx, &data[1].text("letter", "Improperly formatted flag data")?)?;
 
     for name in data[2].text("type", "Improperly formatted flag data")?.split_ascii_whitespace() {
-        // link the type here!
+        let otype_ent = props::get_or_create::<ObjTypeMarker>(world, &name.to_uppercase());
     }
 
     for name in data[3].text("perms", "Improperly formatted flag data")?.split_ascii_whitespace() {
-        // link flag perms here!
+        let fperm_ent = props::get_or_create::<FlagPermMarker>(world, &name.to_uppercase());
     }
 
     for name in data[4].text("negate_perms", "improperly formatted flag data")?.split_ascii_whitespace() {
-        // link negate perms here!
+        let fperm_ent = props::get_or_create::<FlagPermMarker>(world, &name.to_uppercase());
     }
 
-    Ok(prop_idx)
+    Ok(flag_ent)
 }
 
-fn _load_flags(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, type_idx: usize) -> Result<(), DbError> {
+fn _load_flags<T: Component + Default>(mut world: &mut World, data: &[FlatLine]) -> Result<(), DbError> {
     let mut alias_idx: usize = 0;
     let mut name_idx: Vec<usize> = Default::default();
 
@@ -91,46 +86,38 @@ fn _load_flags(mut state: &mut GameState, data: &[FlatLine], perm_idx: usize, ty
     let mut ranges: Vec<Range<usize>> = name_idx.as_slice().windows(2).map(|x| x[0]..x[1]).collect();
 
     for r in ranges {
-        let mut flag_idx = _load_flag_single(state,&data[r], perm_idx, type_idx)?;
+        let mut flag_idx = _load_flag_single::<T>(&mut world,&data[r])?;
     }
-    _load_flag_aliases(state, &data[alias_idx..], type_idx)?;
+    _load_flag_aliases::<T>(world, &data[alias_idx..])?;
 
     Ok(())
 }
 
-fn load_flags(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), DbError> {
-    let perm_idx = state.props.get_or_create_type("FLAG_PERM");
-    let type_idx = state.props.get_or_create_type("FLAG");
-    _load_flags(&mut state, data, perm_idx, type_idx)?;
+fn load_flags(mut world: &mut World, data: &[FlatLine]) -> Result<(), DbError> {
+    _load_flags::<FlagMarker>(world, data)?;
     Ok(())
 }
 
-fn load_powers(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), DbError> {
-    let perm_idx = state.props.get_or_create_type("FLAG_PERM");
-    let type_idx = state.props.get_or_create_type("POWER");
-    _load_flags(&mut state, data, perm_idx, type_idx)?;
+fn load_powers(mut world: &mut World, data: &[FlatLine]) -> Result<(), DbError> {
+    _load_flags::<PowerMarker>(&mut world, data)?;
     Ok(())
 }
 
-fn _load_attr_single(mut state: &mut GameState, data: &[FlatLine], attr_idx: usize, flag_idx: usize) -> Result<Index, DbError> {
-    let name = data[0].text("name", "Improperly formatted attribute data")?;
-    let name_idx = state.props.get_or_create(attr_idx, &name);
+fn _load_attr_single(mut world: &mut World, data: &[FlatLine]) -> Result<Entity, DbError> {
+    let attr_ent = props::get_or_create::<AttributeMarker>(world, data[0].text("name", "Improperly formatted attribute data")?.as_str());
 
     for name in data[1].text("flags", "improperly formatted attribute data")?.split_ascii_whitespace() {
-        // Link attribute flags here!
+        let aflag_ent = props::get_or_create::<AttrFlagMarker>(world, name);
     }
-    let attr = state.props.contents.get_mut(name_idx).unwrap();
-    attr.owner = data[2].dbref("creator", "improperly formatted attribute data")?;
-    attr.data = data[3].text("data", "improperly formatted attribute data")?;
+    //attr.owner = data[2].dbref("creator", "improperly formatted attribute data")?;
+    //attr.data = data[3].text("data", "improperly formatted attribute data")?;
 
-    Ok(name_idx)
+    Ok(attr_ent)
 }
 
-fn load_attributes(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
+fn load_attributes(mut world: &mut World, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
     let mut alias_idx: usize = 0;
     let mut name_idx: Vec<usize> = Default::default();
-    let type_idx = state.props.get_or_create_type("ATTRIBUTE");
-    let flag_idx = state.props.get_or_create_type("ATTR_FLAG");
 
     for (i, line) in data.iter().enumerate() {
         if line.name_str().starts_with("attraliascount") {
@@ -146,44 +133,44 @@ fn load_attributes(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), B
     name_idx.push(alias_idx);
 
     for r in name_idx.as_slice().windows(2).map(|x| x[0]..x[1]) {
-        _load_attr_single(&mut state, &data[r], type_idx, flag_idx)?;
+        _load_attr_single(world, &data[r])?;
     }
 
-    _load_flag_aliases(state, &data[alias_idx..], type_idx)?;
+    _load_flag_aliases::<AttributeMarker>(world, &data[alias_idx..])?;
 
     Ok(())
 }
 
-fn _load_obj_lock(mut state: &mut GameState, data: &[FlatLine], lock_idx: usize, flag_idx: usize, obj_idx: Index) -> Result<(), DbError> {
-    let name = data[0].text("type", "invalid lock data")?.to_lowercase();
-    let creator = data[1].dbref("creator", "invalid lock data")?;
-    let flag_data = data[2].text("flags", "invalid lock data")?;
-    let key = state.props.lockkeys.get_or_intern(data[4].text("key", "invalid lock data")?);
+fn _load_obj_lock(mut world: &mut World, data: &[FlatLine], obj: Entity) -> Result<(), DbError> {
+    //let name = data[0].text("type", "invalid lock data")?.to_lowercase();
+    //let creator = data[1].dbref("creator", "invalid lock data")?;
+    //let flag_data = data[2].text("flags", "invalid lock data")?;
+    //let key = state.props.lockkeys.get_or_intern(data[4].text("key", "invalid lock data")?);
 
-    let reltype = state.props.reltypes.get_or_intern("flag".to_string());
+    //let reltype = state.props.reltypes.get_or_intern("flag".to_string());
 
-    for f in flag_data.split_ascii_whitespace() {
+    //for f in flag_data.split_ascii_whitespace() {
         // attach lock flags to lock here...
-    }
+    //}
 
     Ok(())
 }
 
-fn _load_obj_locks(mut state: &mut GameState, data: &[FlatLine], lock_idx: usize, flag_idx: usize, obj_idx: Index) -> Result<(), Box<dyn Error>> {
-    for ldata in data[1..].chunks(5) {
-        let (name, lock) = _load_obj_lock(&mut state, ldata)?;
-        let idx = state.locks.type_interner.get_or_intern(name.as_str());
-        obj_data.locks.insert(idx, lock);
-    }
+fn _load_obj_locks(mut world: &mut World, data: &[FlatLine], obj: Entity) -> Result<(), DbError> {
+    //for ldata in data[1..].chunks(5) {
+    //    let (name, lock) = _load_obj_lock(&mut state, ldata)?;
+    //    let idx = state.locks.type_interner.get_or_intern(name.as_str());
+    //    obj_data.locks.insert(idx, lock);
+    //}
     Ok(())
 }
 
-fn _load_obj_attrs(mut state: &mut GameState, data: &[FlatLine], mut obj_data: &mut ObjData) -> Result<(), Box<dyn Error>> {
+fn _load_obj_attrs(mut world: &mut World, data: &[FlatLine], obj: Entity) -> Result<(), DbError> {
 
     Ok(())
 }
 
-fn _load_obj(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn Error>> {
+fn _load_obj(mut world: &mut World, data: &[FlatLine]) -> Result<(), DbError> {
     let mut lock_idx: usize = 0;
     let mut attr_idx: usize = 0;
     let mut owner_idx: usize = 0;
@@ -214,7 +201,10 @@ fn _load_obj(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn
         if !info1[0].value_str().starts_with('!') {
             return Err(DbError::new("Invalid Object Data: dbref").into())
         }
-        let num = info1[0].value_str()[1..].parse::<usize>()?;
+        let num = match info1[0].value_str()[1..].parse::<usize>() {
+            Ok(res) => res,
+            Err(e) => return Err(DbError::new("could not convert number"))
+        };
         DbRef::Num(num)
     };
 
@@ -238,13 +228,11 @@ fn _load_obj(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn
         }
     };
 
-    let obj_type = state.objects.get_obj_type(type_name).unwrap();
-
-    let mut flags: HashSet<Rc<Flag>> = Default::default();
+    let obj_type = props::get_or_create::<ObjTypeMarker>(world, type_name);
 
     for f in info2[4].text("flags", "improperly formatted object data")?.split_ascii_whitespace() {
-        if let Some(t) = state.flags.get_flag(f) {
-            flags.insert(t);
+        if let Some(t) = props::find_name::<FlagMarker>(world, f) {
+            //flags.insert(t);
         } else {
             return Err(DbError::new("Improper flag in object data").into())
         }
@@ -252,53 +240,23 @@ fn _load_obj(mut state: &mut GameState, data: &[FlatLine]) -> Result<(), Box<dyn
 
     let creation_timestamp = info2[7].num("created", "improperly formatted object data")?;
 
-    let mut obj_data = ObjData {
-        name: state.objects.interner.get_or_intern(name.as_str()),
-        parent,
-        children: Default::default(),
-        location,
-        contents: Default::default(),
-        zoned: Default::default(),
-        owner,
-        belongings: Default::default(),
-        zone,
-        money,
-        flags,
-        modification_timestamp: 0,
-        attributes: Default::default(),
-        locks: Default::default(),
-        connections: Default::default()
-    };
-    _load_obj_locks(&mut state, lock_data, &mut obj_data)?;
-    _load_obj_attrs(&mut state, attr_data, &mut obj_data)?;
-
-    let mut obj = Obj {
-        db,
-        obj_type,
-        creation_timestamp,
-        data: RefCell::new(obj_data)
-    };
-
-    state.objects.load(obj);
     Ok(())
 }
 
-fn load_objects(mut state: &mut GameState, data: &[FlatLine], start: usize, index: &Vec<usize>) -> Result<(), Box<dyn Error>> {
-    let mut ranges: Vec<Range<usize>> = index.as_slice().windows(2).map(|x| x[0]..x[1]).collect();
+fn load_objects(mut world: &mut World, data: &[FlatLine], start: usize, index: &Vec<usize>) -> Result<(), DbError> {
+    let mut ranges = index.as_slice().windows(2).map(|x| x[0]..x[1]).collect::<Vec<_>>();
 
     for r in ranges {
-        let obj = _load_obj(&mut state, &data[r])?;
+        let obj = _load_obj(world, &data[r])?;
         // Do something with loaded obj here.
     }
-    state.objects.load_final();
+
 
     Ok(())
 }
 
-pub fn read_v6(mut data: impl Read) -> Result<GameState, Box<dyn Error>> {
+pub fn read_v6(mut data: impl Read, world: &mut World) -> Result<(), Box<dyn Error>> {
     // PennMUSH's v6 flatfile is encoded in latin1 which is a subset of WINDOWS_1252.
-
-    let mut out = GameState::default();
 
     let mut decoder = DecodeReaderBytesBuilder::new().encoding(Some(encoding_rs::WINDOWS_1252)).build(data);
     let mut splitter = FlatFileSplitter::new(decoder);
@@ -347,11 +305,11 @@ pub fn read_v6(mut data: impl Read) -> Result<GameState, Box<dyn Error>> {
     }
     objects_index.push(end_of_dump);
 
-    let _ = load_version(&mut out, &loaded[ver_start..flags_start-1])?;
-    let _ = load_flags(&mut out, &loaded[flags_start..powers_start-1])?;
-    let _ = load_powers(&mut out, &loaded[powers_start..attributes_start-1])?;
-    let _ = load_attributes(&mut out, &loaded[attributes_start..objects_start-1])?;
-    let _ = load_objects(&mut out, &loaded[..], objects_start, &objects_index)?;
+    let _ = load_version(world, &loaded[ver_start..flags_start-1])?;
+    let _ = load_flags(world, &loaded[flags_start..powers_start-1])?;
+    let _ = load_powers(world, &loaded[powers_start..attributes_start-1])?;
+    let _ = load_attributes(world, &loaded[attributes_start..objects_start-1])?;
+    let _ = load_objects(world, &loaded[..], objects_start, &objects_index)?;
 
-    Ok(out)
+    Ok(())
 }
