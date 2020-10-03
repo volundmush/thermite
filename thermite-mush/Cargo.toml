@@ -16,3 +16,5 @@ encoding_rs_io = "0.1"
 thermite-util = {version = "0.1", path = "../thermite-util"}
 legion = "0.3"
 lasso = {version = "0.3", features = ["serialize"]}
+bytes = "0.5"
+mio = "0.7"

@@ -254,3 +254,22 @@ pub fn eval_str(text: &str) -> String {
         eval_substitutions(text)
     }
 }
+
+
+pub fn truthy(text: &str) -> bool {
+    // Determines if the provided text should be considered truthy or falsy by the softcode system for functions like t() and if()
+    if text.trim().len() == 0 {
+        return false
+    }
+    
+    if text == "0" {
+        return false
+    }
+
+    if text.starts_with("#-") {
+        return false
+    }
+
+    return true
+
+}
