@@ -15,7 +15,7 @@ use serde_json::Value as JsonValue;
 use futures::{StreamExt, SinkExt};
 
 use crate::{
-    portal::Msg2Portal,
+    portal::{Msg2Portal, Msg2PortalFromLink},
     net::{Msg2MudProtocol, ProtocolCapabilities, ProtocolLink, ProtocolData}
 };
 
@@ -31,7 +31,7 @@ pub enum Msg2Link {
     ClientLines(String, Vec<String>),
     ClientLine(String, String),
     ClientGMCP(String, String, JsonValue),
-    ClientData(HashMap<String, ProtocolLink>),
+    ClientList(HashMap<String, ProtocolLink>),
     PortalJson(JsonValue),
     ClientJson(String, JsonValue)
 }
@@ -41,6 +41,20 @@ pub struct ServerMsgSessionLines {
     pub kind: String,
     pub id: String,
     pub lines: Vec<String>
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionLine {
+    pub kind: String,
+    pub id: String,
+    pub line: String
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionText {
+    pub kind: String,
+    pub id: String,
+    pub text: String
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -209,7 +223,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                             }
                         }
                     } else {
-                        let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id.clone(), String::from("dunno yet"))).await;
+                        let _ = self.tx_portal.send(Msg2Portal::LinkDisconnected(self.conn_id.clone(), String::from("dunno yet"))).await;
                         self.running = false;
                     }
                 },
@@ -286,13 +300,13 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     let _ = self.conn.send(WsMessage::Text(j)).await;
                 }
             },
-            Msg2Link::ClientData(data) => {
+            Msg2Link::ClientList(data) => {
                 let mut out_data = HashMap::new();
                 for (key, value) in data {
                     out_data.insert(key.clone(), value.make_data());
                 }
                 let out = PortalMsgClientData {
-                    kind: String::from("client_data"),
+                    kind: String::from("client_list"),
                     data: out_data
                 };
                 if let Ok(j) = serde_json::to_string(&out) {
@@ -341,56 +355,65 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
 
     async fn process_json_message(&mut self, msg: JsonValue) {
         let t = &msg["kind"];
-        if t.is_string() {
-            match t.to_string().as_str() {
+        if let Some(s) = t.as_str() {
+            match s {
                 "session_lines" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgSessionLines>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkClientMessage(p.id.clone(), Msg2MudProtocol::Lines(p.lines))).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::Lines(p.lines)))).await;
+                    }
+                },
+                "session_line" => {
+                    if let Ok(p) = serde_json::from_value::<ServerMsgSessionLine>(msg.clone()) {
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::Line(p.line)))).await;
+                    }
+                },
+                "session_text" => {
+                    if let Ok(p) = serde_json::from_value::<ServerMsgSessionText>(msg.clone()) {
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::Text(p.text)))).await;
                     }
                 },
                 "session_gmcp" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgSessionGMCP>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkClientMessage(p.id.clone(), Msg2MudProtocol::GMCP(p.gmcp_cmd.clone(), p.gmcp_data))).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::GMCP(p.gmcp_cmd.clone(), p.gmcp_data)))).await;
                     }
                 },
                 "session_mssp" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgSessionMSSP>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkClientMessage(p.id.clone(), Msg2MudProtocol::ServerStatus(p.mssp))).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::ServerStatus(p.mssp)))).await;
                     }
                 },
                 "session_prompt" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgSessionPrompt>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkClientMessage(p.id.clone(), Msg2MudProtocol::Prompt(p.prompt))).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::Prompt(p.prompt)))).await;
                     }
                 },
                 "session_json" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgSessionJson>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkClientJson(p.id.clone(), p.data)).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::SetClientJson(p.id.clone(), p.data))).await;
                     }
                 },
                 "session_request_json" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgSessionJson>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkClientRequestJson(p.id)).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::RequestClientJson(p.id))).await;
                     }
                 },
                 "session_request_capabilities" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgRequestCapabilities>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkClientRequestCapabilities(p.id)).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::RequestClientCapabilities(p.id))).await;
                     }
                 },
                 "server_request_clients" => {
-                    let _ = self.tx_portal.send(Msg2Portal::LinkRequestClients).await;
+                    let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::RequestClientList)).await;
                 },
                 "server_json" => {
                     if let Ok(p) = serde_json::from_value::<ServerMsgJson>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::LinkDumpJson(p.data)).await;
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::SetPortalJson(p.data))).await;
                     }
                 },
                 "server_request_json" => {
-                    let _ = self.tx_portal.send(Msg2Portal::LinkRequestJson).await;
+                    let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id.clone(), Msg2PortalFromLink::RequestPortalJson)).await;
                 },
                 _ => {
-
                 }
             }
         }

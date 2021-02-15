@@ -16,7 +16,7 @@ use bytes::{BytesMut, Bytes};
 
 use crate::{
     telnet::{
-        protocol::{TelnetOption, TelnetOptionState, TelnetProtocol},
+        protocol::{TelnetOption, TelnetOptionState, TelnetProtocol, TelnetHandshakes},
         codec::TelnetCodec,
         codes as tc
     },
@@ -34,6 +34,7 @@ pub struct TelnetProtocolFactory {
     opening_bytes: Bytes,
     tx_portal: Sender<Msg2Portal>,
     ids: HashSet<String>,
+    handshakes: TelnetHandshakes
 }
 
 impl TelnetProtocolFactory {
@@ -44,7 +45,7 @@ impl TelnetProtocolFactory {
         let mut opstates: HashMap<u8, TelnetOptionState> = Default::default();
 
         let mut raw_bytes = BytesMut::new();
-
+        let mut handshakes = TelnetHandshakes::default();
         for (b, handler) in options.iter() {
             let mut state = TelnetOptionState::default();
 
@@ -52,14 +53,19 @@ impl TelnetProtocolFactory {
                 state.local.negotiating = true;
                 raw_bytes.reserve(3);
                 raw_bytes.extend(&[tc::IAC, tc::WILL, b.clone()]);
+                handshakes.local.insert(b.clone());
             }
             if handler.start_remote {
                 state.remote.negotiating = true;
                 raw_bytes.reserve(3);
                 raw_bytes.extend(&[tc::IAC, tc::DO, b.clone()]);
+                handshakes.remote.insert(b.clone());
             }
             opstates.insert(b.clone(), state);
         }
+        handshakes.ttype.insert(0);
+        handshakes.ttype.insert(1);
+        handshakes.ttype.insert(2);
 
         Self {
             factory_id,
@@ -69,7 +75,8 @@ impl TelnetProtocolFactory {
             telnet_statedef: opstates,
             opening_bytes: raw_bytes.freeze(),
             tx_portal,
-            ids: HashSet::default()
+            ids: HashSet::default(),
+            handshakes
         }
     }
 
@@ -106,7 +113,7 @@ impl TelnetProtocolFactory {
         let conn_id = format!("{}_{}", self.factory_id, gen_id);
         self.ids.insert(gen_id);
 
-        let mut tel_prot = TelnetProtocol::new(conn_id, telnet_codec, addr.clone(), tls.clone(), self.tx_portal.clone(), self.telnet_options.clone(), self.telnet_statedef.clone());
+        let mut tel_prot = TelnetProtocol::new(conn_id, telnet_codec, addr.clone(), tls.clone(), self.tx_portal.clone(), self.telnet_options.clone(), self.telnet_statedef.clone(), self.handshakes.clone());
 
         let opening = self.opening_bytes.clone();
         let _ = tokio::spawn(async move {tel_prot.run(opening).await;});

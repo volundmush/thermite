@@ -23,7 +23,8 @@ pub enum Msg2MudProtocol {
     Line(String),
     Lines(Vec<String>),
     Prompt(String),
-    GMCP(String, serde_json::Value),
+    Text(String),
+    GMCP(String, JsonValue),
     // When a game requests a Mud Server Status Protocol message,
     ServerStatus(Vec<(String, String)>),
     GetReady

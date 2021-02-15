@@ -85,7 +85,7 @@ impl LinkProtocolFactory {
                     tx_link
                 };
                 let _ = tokio::spawn(async move {prot.run().await});
-                let _ = self.tx_portal.send(Msg2Portal::LinkReady(link)).await;
+                let _ = self.tx_portal.send(Msg2Portal::LinkConnected(link)).await;
             },
             Err(e) => {
 
