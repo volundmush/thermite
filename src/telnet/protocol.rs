@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    io,
     vec::Vec,
     net::SocketAddr,
     time::Duration,
@@ -29,7 +28,7 @@ use crate::{
         codec::{TelnetCodec, TelnetEvent},
         codes as tc
     },
-    net::Msg2MudProtocol,
+    net::{Msg2MudProtocol, ProtocolLink, ProtocolCapabilities, Protocol},
     portal::Msg2Portal
 };
 
@@ -67,6 +66,7 @@ pub struct TelnetConfig {
     pub height: u16,
     pub gmcp: bool,
     pub msdp: bool,
+    pub mssp: bool,
     pub mxp: bool,
     pub mccp2: bool,
     pub ttype: bool,
@@ -98,6 +98,7 @@ impl Default for TelnetConfig {
             height: 24,
             gmcp: false,
             msdp: false,
+            mssp: false,
             mxp: false,
             mccp2: false,
             ttype: false,
@@ -114,6 +115,27 @@ impl Default for TelnetConfig {
             proxy: false,
             truecolor: false,
             mnes: false
+        }
+    }
+}
+
+impl TelnetConfig {
+    fn capabilities(&self) -> ProtocolCapabilities {
+        ProtocolCapabilities {
+            protocol: Protocol::Telnet,
+            client_name: self.client_name.clone(),
+            client_version: self.client_version.clone(),
+            utf8: self.utf8,
+            html: false,
+            mxp: self.mxp,
+            gmcp: self.gmcp,
+            msdp: self.msdp,
+            mssp: self.mssp,
+            ansi: self.ansi,
+            xterm256: self.xterm256,
+            width: self.width,
+            height: self.height,
+            screen_reader: self.screen_reader
         }
     }
 }
@@ -138,7 +160,8 @@ pub struct TelnetProtocol<T> {
     tx_portal: Sender<Msg2Portal>,
     tx_protocol: Sender<Msg2MudProtocol>,
     rx_protocol: Receiver<Msg2MudProtocol>,
-    running: bool
+    running: bool,
+    app_buffer: BytesMut
 }
 
 
@@ -168,7 +191,19 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             active: false,
             sent_link: false,
             tls,
-            running: true
+            running: true,
+            app_buffer: BytesMut::with_capacity(1024)
+        }
+    }
+
+    fn make_link(&self) -> ProtocolLink {
+        ProtocolLink {
+            conn_id: self.conn_id.clone(),
+            addr: self.addr.clone(),
+            tls: self.tls,
+            capabilities: self.config.capabilities(),
+            tx_protocol: self.tx_protocol.clone(),
+            json_data: Default::default()
         }
     }
 
@@ -184,7 +219,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             return;
         }
         if self.handshakes_left.len() == 0 && !self.ttype_pending {
-            //let _ = self.tx_mud.send(Msg2MudTelnetProtocol::Ready(self.config.clone())).await;
+            let _ = self.tx_portal.send(Msg2Portal::ClientReady(self.make_link())).await;
             self.sent_link = true;
         }
     }
@@ -193,14 +228,14 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         if self.active || self.sent_link {
             return;
         }
-        //let _ = self.tx_mud.send(Msg2MudTelnetProtocol::Ready(self.config.clone())).await;
+        let _ = self.tx_portal.send(Msg2Portal::ClientReady(self.make_link())).await;
         self.sent_link = true;
     }
 
     pub async fn run(&mut self, opening: Bytes) {
         // Just packing all of this together so it gets sent at once.
         let _ = self.conn.send(TelnetEvent::Data(opening)).await;
-        let mut send_chan = self.tx_protocol.clone();
+        let send_chan = self.tx_protocol.clone();
 
         // Ready a message to fire off quickly for in case
         let _ready_task = tokio::spawn(async move {
@@ -222,7 +257,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                             }
                         }
                     } else {
-                        let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id.clone())).await;
+                        let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id.clone(), String::from("dunno yet"))).await;
                         self.running = false;
                     }
                 },
@@ -241,9 +276,24 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             TelnetEvent::Negotiate(comm, op) => self.receive_negotiate(comm, op).await,
             TelnetEvent::Command(byte) => {},
             TelnetEvent::Data(data) => {
-
+                let _ = self.process_telnet_data(data).await;
             }
         }
+    }
+
+    async fn process_telnet_data(&mut self, data: Bytes) {
+        self.app_buffer.put(data);
+        while let Some(ipos) = self.app_buffer.as_ref().iter().position(|b| b == &tc::LF) {
+            let cmd = self.app_buffer.split_to(ipos);
+            if let Ok(s) = String::from_utf8(cmd.to_vec()) {
+                let _ = self.handle_user_command(s.trim().to_string()).await;
+            }
+            self.app_buffer.advance(1);
+        }
+    }
+
+    async fn handle_user_command(&mut self, cmd: String) {
+        let _ = self.tx_portal.send(Msg2Portal::ClientLine(self.conn_id.clone(), cmd)).await;
     }
 
     async fn process_protocol_message(&mut self, msg: Msg2MudProtocol) {
@@ -251,8 +301,12 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             Msg2MudProtocol::Disconnect => {
                 self.running = false;
             },
-            Msg2MudProtocol::Line(text) => {
-                let _ = self.conn.send(TelnetEvent::Data(Bytes::from(text))).await;
+            Msg2MudProtocol::Line(l) => {
+                if l.ends_with("\n") {
+                    let _ = self.conn.send(TelnetEvent::Data(Bytes::from(l))).await;
+                } else {
+                    let _ = self.conn.send(TelnetEvent::Data(Bytes::from(l + "\n"))).await;
+                }
             },
             Msg2MudProtocol::Prompt(text) => {
                 let _ = self.conn.send(TelnetEvent::Data(Bytes::from(text))).await;
@@ -265,6 +319,15 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             },
             Msg2MudProtocol::GetReady => {
                 let _ = self.get_ready().await;
+            },
+            Msg2MudProtocol::Lines(data) => {
+                for l in data {
+                    if l.ends_with("\n") {
+                        let _ = self.conn.send(TelnetEvent::Data(Bytes::from(l))).await;
+                    } else {
+                        let _ = self.conn.send(TelnetEvent::Data(Bytes::from(l + "\n"))).await;
+                    }
+                }
             }
         }
     }

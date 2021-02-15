@@ -13,7 +13,7 @@ use tokio_rustls::{
     TlsAcceptor,
     server::TlsStream
 };
-
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 
@@ -21,10 +21,11 @@ use serde_json::Value as JsonValue;
 pub enum Msg2MudProtocol {
     Disconnect,
     Line(String),
+    Lines(Vec<String>),
     Prompt(String),
     GMCP(String, serde_json::Value),
     // When a game requests a Mud Server Status Protocol message,
-    ServerStatus(HashMap<String, String>),
+    ServerStatus(Vec<(String, String)>),
     GetReady
 }
 
@@ -34,8 +35,15 @@ pub enum ConnectResponse {
     Error(String)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Protocol {
+    Telnet = 0,
+    WebSocket = 1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolCapabilities {
+    pub protocol: Protocol,
     pub client_name: String,
     pub client_version: String,
     pub utf8: bool,
@@ -43,11 +51,21 @@ pub struct ProtocolCapabilities {
     pub mxp: bool,
     pub gmcp: bool,
     pub msdp: bool,
+    pub mssp: bool,
     pub ansi: bool,
     pub xterm256: bool,
     pub width: u16,
     pub height: u16,
     pub screen_reader: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolData {
+    pub id: String,
+    pub addr: SocketAddr,
+    pub tls: bool,
+    pub capabilities: ProtocolCapabilities,
+    pub json_data: JsonValue
 }
 
 // This is received by whatever handles connections once they are ready to join the game.
@@ -59,6 +77,18 @@ pub struct ProtocolLink {
     pub capabilities: ProtocolCapabilities,
     pub tx_protocol: Sender<Msg2MudProtocol>,
     pub json_data: JsonValue
+}
+
+impl ProtocolLink {
+    pub fn make_data(&self) -> ProtocolData {
+        ProtocolData {
+            id: self.conn_id.clone(),
+            addr: self.addr.clone(),
+            tls: self.tls,
+            capabilities: self.capabilities.clone(),
+            json_data: self.json_data.clone()
+        }
+    }
 }
 
 
@@ -87,15 +117,15 @@ pub struct Listener {
     tls_acceptor: Option<TlsAcceptor>,
     rx_listener: Receiver<Msg2Listener>,
     pub tx_listener: Sender<Msg2Listener>,
-    tx_ListenManager: Sender<Msg2ListenManager>
+    tx_listenmanager: Sender<Msg2ListenManager>
 }
 
 impl Listener {
-    pub fn new(listener: TcpListener, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_ListenManager: Sender<Msg2ListenManager>, factory: &String) -> Self {
+    pub fn new(listener: TcpListener, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_listenmanager: Sender<Msg2ListenManager>, factory: &String) -> Self {
         let (tx_listener, rx_listener) = channel(50);
         Self {
             listen_id,
-            tx_ListenManager,
+            tx_listenmanager,
             factory: factory.clone(),
             tls_acceptor,
             listener,
@@ -126,14 +156,14 @@ impl Listener {
                                     let c_acc = acc.clone();
                                     if let Ok(tls_stream) = c_acc.accept(tcp_stream).await {
 
-                                        let _ = self.tx_ListenManager.send(Msg2ListenManager::AcceptTLS(tls_stream, addr, self.factory.clone())).await;
+                                        let _ = self.tx_listenmanager.send(Msg2ListenManager::AcceptTLS(tls_stream, addr, self.factory.clone())).await;
                                     } else {
                                         // Not sure what to do if TLS fails...
                                     }
                                 },
                                 Option::None => {
                                     // TLS is not engaged.
-                                    let _ = self.tx_ListenManager.send(Msg2ListenManager::AcceptTCP(tcp_stream, addr, self.factory.clone())).await;
+                                    let _ = self.tx_listenmanager.send(Msg2ListenManager::AcceptTCP(tcp_stream, addr, self.factory.clone())).await;
                                 }
                             }
                         },
@@ -185,8 +215,8 @@ pub enum Msg2ListenManager {
 pub struct ListenManager {
     listeners: HashMap<String, ListenerLink>,
     factories: HashMap<String, FactoryLink>,
-    pub tx_ListenManager: Sender<Msg2ListenManager>,
-    rx_ListenManager: Receiver<Msg2ListenManager>,
+    pub tx_listenmanager: Sender<Msg2ListenManager>,
+    rx_listenmanager: Receiver<Msg2ListenManager>,
     //filter: Option<Box<dyn ListenManagerFilter>>
 }
 
@@ -194,20 +224,20 @@ impl ListenManager {
 
     pub fn new() -> Self {
 
-        let (tx_ListenManager, rx_ListenManager) = channel(50);
+        let (tx_listenmanager, rx_listenmanager) = channel(50);
 
         Self {
             listeners: Default::default(),
             factories: Default::default(),
             //filter,
-            tx_ListenManager,
-            rx_ListenManager
+            tx_listenmanager,
+            rx_listenmanager
         }
     }
 
     pub async fn run(&mut self) {
         loop {
-            if let Some(msg) = self.rx_ListenManager.recv().await {
+            if let Some(msg) = self.rx_listenmanager.recv().await {
                 match msg {
                     Msg2ListenManager::Kill => {
                         // This should full stop all listeners and clients and tasks then end this tasks.
@@ -248,7 +278,7 @@ impl ListenManager {
 
         let tls_bool = tls.is_some();
 
-        let mut listener = Listener::new(listener, tls.clone(), listen_id.clone(), self.tx_ListenManager.clone(), protocol);
+        let mut listener = Listener::new(listener, tls.clone(), listen_id.clone(), self.tx_listenmanager.clone(), protocol);
         let tx_listener = listener.tx_listener.clone();
 
         let handle = tokio::spawn(async move {listener.run().await});

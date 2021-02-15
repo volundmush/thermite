@@ -1,8 +1,7 @@
 use tokio_util::codec::{Encoder, Decoder};
 use bytes::{BytesMut, Buf, BufMut, Bytes};
 use std::{
-    io,
-    io::{Write}
+    io
 };
 use super::codes;
 
@@ -87,7 +86,7 @@ impl Decoder for TelnetCodec {
                     },
                     codes::WILL | codes::WONT | codes::DO | codes::DONT => {
                         if src.len() > 2 {
-                            let mut answer = TelnetEvent::Negotiate(src[1], src[2]);
+                            let answer = TelnetEvent::Negotiate(src[1], src[2]);
                             src.advance(3);
                             return Ok(Some(answer));
                         } else {
@@ -96,14 +95,14 @@ impl Decoder for TelnetCodec {
                         }
                     },
                     codes::SB => {
-                        // Since the valid signature is IAC SB <option> <data> IAC SE, and data might be empty, we need at least 4 bytes.
-                        if src.len() > 3 {
+                        // Since the valid signature is IAC SB <option> <data> IAC SE, and data might be empty, we need at least 5 bytes.
+                        if src.len() > 4 {
                             if let Some(ipos) = src.as_ref().windows(2).position(|b| b[0] == codes::IAC && b[1] == codes::SE) {
                                 // Split off any available up to an IAC and stuff it in the sub data buffer.
                                 let mut data = src.split_to(ipos);
                                 src.advance(2);
                                 let discard = data.split_to(3);
-                                let mut answer = TelnetEvent::SubNegotiate(discard[2], data.freeze());
+                                let answer = TelnetEvent::SubNegotiate(discard[2], data.freeze());
                                 return Ok(Some(answer))
                             } else {
                                 return Ok(None)

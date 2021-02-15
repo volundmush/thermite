@@ -1,14 +1,11 @@
 use tokio::{
-    net::TcpListener,
-    sync::mpsc::{channel, Receiver, Sender}
+    net::TcpListener
 };
 
 use std::{
-    env,
     error::Error,
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    str::FromStr
+    net::{SocketAddr}
 };
 
 use tokio_rustls::{
@@ -33,8 +30,12 @@ use thermite::{
         protocol::TelnetOption,
         factory::TelnetProtocolFactory
     },
+    link::{
+        factory::LinkProtocolFactory
+    },
     portal::{Portal, Msg2Portal}
 };
+
 
 fn teloptions() -> HashMap<u8, TelnetOption> {
     let mut map: HashMap<u8, TelnetOption> = Default::default();
@@ -71,8 +72,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut telnet_factory = TelnetProtocolFactory::new("telnet".parse().unwrap(), teloptions(), tx_portal.clone());
     listen.register_factory(telnet_factory.link());
+    let _tel_task = tokio::spawn(async move {telnet_factory.run().await});
 
-    let tel_task = tokio::spawn(async move {telnet_factory.run().await});
+    let mut link_factory = LinkProtocolFactory::new("link".parse().unwrap(), tx_portal.clone());
+    listen.register_factory(link_factory.link());
+    let _link_task = tokio::spawn(async move {link_factory.run().await});
+
 
     for (k, v) in conf.listeners.iter() {
 
@@ -88,8 +93,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let listen_task = tokio::spawn(async move {listen.run().await});
-
+    let _ = portal.start_timer().await;
     let portal_task = tokio::spawn(async move {portal.run().await});
+
     portal_task.await;
 
     Ok(())
