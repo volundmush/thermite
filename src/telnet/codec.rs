@@ -114,8 +114,9 @@ impl Decoder for TelnetCodec {
                     },
                     _ => {
                         // Anything that's not the above is a simple IAC Command.
+                        let cmd = src[1];
                         src.advance(2);
-                        return Ok(Some(TelnetEvent::Command(src[1])))
+                        return Ok(Some(TelnetEvent::Command(cmd)))
                     }
                 }
             } else {

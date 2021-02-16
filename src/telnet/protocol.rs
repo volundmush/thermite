@@ -219,17 +219,20 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     }
 
     async fn check_ready(&mut self) {
-        if self.active || self.sent_link {
+        if self.sent_link {
+            println!("check ready was called but link already sent");
             return;
         }
         if self.handshakes_left.is_empty() {
-            let _ = self.tx_portal.send(Msg2Portal::ClientConnected(self.make_link())).await;
-            self.sent_link = true;
+            println!("check ready has cleared all handshakes");
+            let _ = self.get_ready().await;
+        } else {
+            println!("Check ready was called but still has {} handshkes left", self.handshakes_left.len());
         }
     }
 
     async fn get_ready(&mut self) {
-        if self.active || self.sent_link {
+        if self.sent_link {
             return;
         }
         let _ = self.tx_portal.send(Msg2Portal::ClientConnected(self.make_link())).await;
@@ -244,6 +247,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         // Ready a message to fire off quickly for in case
         let _ready_task = tokio::spawn(async move {
             time::sleep(Duration::from_millis(500)).await;
+            println!("Handshake timeout reached");
             let _ = send_chan.send(Msg2MudProtocol::GetReady).await;
             ()
         });
@@ -297,7 +301,17 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     }
 
     async fn handle_user_command(&mut self, cmd: String) {
-        let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id.clone(), Msg2PortalFromClient::Line(cmd))).await;
+        if cmd.len() > 0 {
+            if cmd.starts_with("//") {
+                let _ = self.handle_protocol_command(cmd);
+            } else if self.sent_link {
+                let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id.clone(), Msg2PortalFromClient::Line(cmd))).await;
+            }
+        }
+    }
+
+    async fn handle_protocol_command(&mut self, cmd: String) {
+
     }
 
     async fn process_protocol_message(&mut self, msg: Msg2MudProtocol) {
@@ -708,21 +722,27 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     }
 
     async fn receive_naws(&mut self, mut data: Bytes) {
+        println!("NAWS received {} bytes", data.len());
         if data.len() >= 4 {
             let old_width = self.config.width;
             let old_height = self.config.height;
             self.config.width = data.get_u16();
             self.config.height = data.get_u16();
-
-            if self.config.width != old_width || self.config.height != old_height {
+            if (self.config.width != old_width) || (self.config.height != old_height) {
+                println!("Did size change?!");
                 let _ = self.update_capabilities().await;
+            } else {
+                println!("Size did not change");
             }
         }
     }
 
     async fn update_capabilities(&mut self) {
-        if self.active {
+        if self.sent_link {
+            println!("We did send the link!");
             let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id.clone(), Msg2PortalFromClient::Capabilities(self.config.capabilities()))).await;
+        } else {
+            println!("Did we not send the link?!");
         }
     }
 }

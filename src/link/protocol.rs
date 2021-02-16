@@ -260,6 +260,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                 }
             },
             Msg2Link::ClientCapabilities(id, cap) => {
+                println!("Link received client cap");
                 let out = PortalMsgClientCapabilities {
                     kind: String::from("client_capabilities"),
                     id,
@@ -267,6 +268,8 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                 };
                 if let Ok(j) = serde_json::to_string(&out) {
                     let _ = self.conn.send(WsMessage::Text(j)).await;
+                } else {
+                    println!("Was there a serialize error?");
                 }
             },
             Msg2Link::ClientLines(id, lines) => {

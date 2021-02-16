@@ -106,6 +106,7 @@ impl Portal {
                         if let Some(link) = &self.link {
                             match msg {
                                 Msg2PortalFromClient::Capabilities(cap) => {
+                                    println!("Portal Received Client Capabilities");
                                     p.capabilities = cap.clone();
                                     let _ = link.tx_link.send(Msg2Link::ClientCapabilities(id, cap)).await;
                                 },
