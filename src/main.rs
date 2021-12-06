@@ -8,20 +8,6 @@ use std::{
     net::{SocketAddr}
 };
 
-use tokio_rustls::{
-    TlsAcceptor,
-    rustls::{
-        ServerConfig,
-        PrivateKey,
-        Certificate,
-        NoClientAuth,
-        internal::pemfile::{
-            certs,
-            rsa_private_keys
-        }
-    },
-};
-
 use thermite::{
     config::{Config, ServerConfig as ThermiteServer},
     net::{ListenManager},
@@ -59,7 +45,7 @@ fn teloptions() -> HashMap<u8, TelnetOption> {
 async fn main() -> Result<(), Box<dyn Error>> {
     let conf = Config::from_file(String::from("config.toml"))?;
 
-    let mut tls: HashMap<String, TlsAcceptor> = HashMap::with_capacity(conf.tls.len());
+    //let mut tls: HashMap<String, TlsAcceptor> = HashMap::with_capacity(conf.tls.len());
     for (k, v) in conf.tls.iter() {
         // I'll worry about this later..
     }

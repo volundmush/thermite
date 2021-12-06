@@ -53,8 +53,7 @@ pub struct ProtocolCapabilities {
     pub gmcp: bool,
     pub msdp: bool,
     pub mssp: bool,
-    pub ansi: bool,
-    pub xterm256: bool,
+    pub color: u8,
     pub width: u16,
     pub height: u16,
     pub screen_reader: bool,
@@ -190,20 +189,6 @@ pub struct ListenerLink {
     pub tls: bool,
     pub handle: JoinHandle<()>,
     pub tx_listener: Sender<Msg2Listener>,
-}
-
-#[derive(Clone)]
-pub struct ClientCapabilities {
-    pub text: bool,
-    pub utf8: bool,
-    pub html: bool,
-    pub mxp: bool,
-    pub data: bool,
-    pub ansi: bool,
-    pub xterm256: bool,
-    pub width: u16,
-    pub height: u16,
-    pub screen_reader: bool
 }
 
 pub enum Msg2ListenManager {

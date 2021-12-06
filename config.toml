@@ -7,4 +7,4 @@ external = "0.0.0.0"
 
 [listeners]
 telnet = {interface = "external", port = 7999, protocol = "telnet"}
-link = {interface = "external", port = 7998, protocol = "link"}
+link = {interface = "localhost", port = 7998, protocol = "link"}

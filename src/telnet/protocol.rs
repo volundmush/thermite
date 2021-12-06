@@ -121,7 +121,7 @@ impl Default for TelnetConfig {
 
 impl TelnetConfig {
     fn capabilities(&self) -> ProtocolCapabilities {
-        ProtocolCapabilities {
+        let mut cap = ProtocolCapabilities {
             protocol: Protocol::Telnet,
             client_name: self.client_name.clone(),
             client_version: self.client_version.clone(),
@@ -131,12 +131,18 @@ impl TelnetConfig {
             gmcp: self.gmcp,
             msdp: self.msdp,
             mssp: self.mssp,
-            ansi: self.ansi,
-            xterm256: self.xterm256,
+            color: 0,
             width: self.width,
             height: self.height,
             screen_reader: self.screen_reader
+        };
+        if self.ansi {
+            cap.color = 1;
         }
+        if self.xterm256 {
+            cap.color = 2;
+        }
+        cap
     }
 }
 
@@ -220,14 +226,10 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
 
     async fn check_ready(&mut self) {
         if self.sent_link {
-            println!("check ready was called but link already sent");
             return;
         }
         if self.handshakes_left.is_empty() {
-            println!("check ready has cleared all handshakes");
             let _ = self.get_ready().await;
-        } else {
-            println!("Check ready was called but still has {} handshkes left", self.handshakes_left.len());
         }
     }
 
@@ -247,7 +249,6 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         // Ready a message to fire off quickly for in case
         let _ready_task = tokio::spawn(async move {
             time::sleep(Duration::from_millis(500)).await;
-            println!("Handshake timeout reached");
             let _ = send_chan.send(Msg2MudProtocol::GetReady).await;
             ()
         });
