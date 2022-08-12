@@ -723,17 +723,14 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     }
 
     async fn receive_naws(&mut self, mut data: Bytes) {
-        println!("NAWS received {} bytes", data.len());
+
         if data.len() >= 4 {
             let old_width = self.config.width;
             let old_height = self.config.height;
             self.config.width = data.get_u16();
             self.config.height = data.get_u16();
             if (self.config.width != old_width) || (self.config.height != old_height) {
-                println!("Did size change?!");
                 let _ = self.update_capabilities().await;
-            } else {
-                println!("Size did not change");
             }
         }
     }
