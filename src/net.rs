@@ -27,8 +27,7 @@ pub enum Msg2MudProtocol {
     Text(String),
     GMCP(String, JsonValue),
     // When a game requests a Mud Server Status Protocol message,
-    ServerStatus(Vec<(String, String)>),
-    GetReady
+    ServerStatus(Vec<(String, String)>)
 }
 
 #[derive(Debug)]
@@ -37,34 +36,96 @@ pub enum ConnectResponse {
     Error(String)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Protocol {
     Telnet = 0,
     WebSocket = 1,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Color {
+    NoColor = 0,
+    Ansi = 1,
+    Xterm256 = 2,
+    TrueColor = 3
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProtocolCapabilities {
     pub protocol: Protocol,
+    pub encryption: bool,
     pub client_name: String,
     pub client_version: String,
+    pub encoding: String,
     pub utf8: bool,
-    pub html: bool,
-    pub mxp: bool,
+    pub color: Color,
+    pub width: u16,
+    pub height: u16,
     pub gmcp: bool,
     pub msdp: bool,
     pub mssp: bool,
-    pub color: u8,
-    pub width: u16,
-    pub height: u16,
+    pub mxp: bool,
+    pub mccp2: bool,
+    pub mccp2_enable: bool,
+    pub mccp3: bool,
+    pub mccp3_enable: bool,
+    pub ttype: bool,
+    pub naws: bool,
+    pub sga: bool,
+    pub linemode: bool,
+    pub force_endline: bool,
+    pub oob: bool,
+    pub tls: bool,
     pub screen_reader: bool,
+    pub mouse_tracking: bool,
+    pub vt100: bool,
+    pub osc_color_palette: bool,
+    pub proxy: bool,
+    pub mnes: bool
 }
+
+impl Default for ProtocolCapabilities {
+    fn default() -> Self {
+        Self {
+            protocol: Protocol::Telnet,
+            encryption: false,
+            client_name: "UNKNOWN".to_string(),
+            client_version: "UNKNOWN".to_string(),
+            encoding: "".to_string(),
+            utf8: false,
+            color: Color::NoColor,
+            width: 78,
+            height: 24,
+            gmcp: false,
+            msdp: false,
+            mssp: false,
+            mxp: false,
+            mccp2: false,
+            mccp2_enable: false,
+            mccp3: false,
+            mccp3_enable: false,
+            ttype: false,
+            naws: false,
+            sga: false,
+            linemode: false,
+            force_endline: false,
+            oob: false,
+            tls: false,
+            screen_reader: false,
+            mouse_tracking: false,
+            vt100: false,
+            osc_color_palette: false,
+            proxy: false,
+            mnes: false,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolData {
     pub id: String,
     pub addr: SocketAddr,
-    pub tls: bool,
     pub capabilities: ProtocolCapabilities,
     pub json_data: JsonValue
 }
@@ -74,7 +135,6 @@ pub struct ProtocolData {
 pub struct ProtocolLink {
     pub conn_id: String,
     pub addr: SocketAddr,
-    pub tls: bool,
     pub capabilities: ProtocolCapabilities,
     pub tx_protocol: Sender<Msg2MudProtocol>,
     pub json_data: JsonValue
@@ -85,7 +145,6 @@ impl ProtocolLink {
         ProtocolData {
             id: self.conn_id.clone(),
             addr: self.addr.clone(),
-            tls: self.tls,
             capabilities: self.capabilities.clone(),
             json_data: self.json_data.clone()
         }
@@ -122,12 +181,13 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn new(listener: TcpListener, tls_acceptor: Option<TlsAcceptor>, listen_id: String, tx_listenmanager: Sender<Msg2ListenManager>, factory: &String) -> Self {
+    pub fn new(listener: TcpListener, tls_acceptor: Option<TlsAcceptor>, listen_id: &str,
+               tx_listenmanager: Sender<Msg2ListenManager>, factory: &str) -> Self {
         let (tx_listener, rx_listener) = channel(50);
         Self {
-            listen_id,
+            listen_id: String::from(listen_id),
             tx_listenmanager,
-            factory: factory.clone(),
+            factory: String::from(factory),
             tls_acceptor,
             listener,
             tx_listener,
@@ -255,8 +315,8 @@ impl ListenManager {
         self.factories.insert(factory.factory_id.clone(), factory);
     }
 
-    pub fn listen(&mut self, listen_id: String, listener: TcpListener, tls: Option<TlsAcceptor>, protocol: &String) {
-        if self.listeners.contains_key(&listen_id) {
+    pub fn listen(&mut self, listen_id: &str, listener: TcpListener, tls: Option<TlsAcceptor>, protocol: &str) {
+        if self.listeners.contains_key(listen_id) {
             return;
         }
         if !self.factories.contains_key(protocol) {
@@ -265,18 +325,18 @@ impl ListenManager {
 
         let tls_bool = tls.is_some();
 
-        let mut listener = Listener::new(listener, tls.clone(), listen_id.clone(), self.tx_listenmanager.clone(), protocol);
+        let mut listener = Listener::new(listener, tls.clone(), listen_id, self.tx_listenmanager.clone(), protocol);
         let tx_listener = listener.tx_listener.clone();
 
         let handle = tokio::spawn(async move {listener.run().await});
 
         let listen_link = ListenerLink {
-            listen_id: listen_id.clone(),
-            factory: protocol.clone(),
+            listen_id: String::from(listen_id),
+            factory: String::from(protocol),
             handle,
             tx_listener,
             tls: tls_bool
         };
-        self.listeners.insert(listen_id, listen_link);
+        self.listeners.insert(String::from(listen_id), listen_link);
     }
 }

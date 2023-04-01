@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     vec::Vec,
     net::SocketAddr,
-    time::Duration,
+    time::{Duration, Instant},
     sync::Arc
 };
 
@@ -14,6 +14,8 @@ use tokio::{
 
 use tokio_util::codec::{Framed};
 
+use tokio_stream::wrappers::IntervalStream;
+
 use bytes::{BytesMut, Bytes, BufMut, Buf};
 
 use futures::{
@@ -21,7 +23,10 @@ use futures::{
     stream::{StreamExt}
 };
 
+
 use serde_json::Value as JsonValue;
+
+use once_cell::sync::Lazy;
 
 use crate::{
     telnet::{
@@ -31,6 +36,7 @@ use crate::{
     net::{Msg2MudProtocol, ProtocolLink, ProtocolCapabilities, Protocol},
     portal::{Msg2Portal, Msg2PortalFromClient}
 };
+use crate::net::Color;
 
 
 #[derive(Default, Clone)]
@@ -54,97 +60,22 @@ pub struct TelnetOption {
     pub start_remote: bool,
 }
 
-#[derive(Clone, Debug)]
-pub struct TelnetConfig {
-    pub client_name: String,
-    pub client_version: String,
-    pub encoding: String,
-    pub utf8: bool,
-    pub ansi: bool,
-    pub xterm256: bool,
-    pub width: u16,
-    pub height: u16,
-    pub gmcp: bool,
-    pub msdp: bool,
-    pub mssp: bool,
-    pub mxp: bool,
-    pub mccp2: bool,
-    pub ttype: bool,
-    pub naws: bool,
-    pub sga: bool,
-    pub linemode: bool,
-    pub force_endline: bool,
-    pub oob: bool,
-    pub tls: bool,
-    pub screen_reader: bool,
-    pub mouse_tracking: bool,
-    pub vt100: bool,
-    pub osc_color_palette: bool,
-    pub proxy: bool,
-    pub truecolor: bool,
-    pub mnes: bool
-}
+static TELNET_OPTIONS: Lazy<HashMap<u8, TelnetOption>> = Lazy::new( || {
+    let mut map: HashMap<u8, TelnetOption> = Default::default();
 
-impl Default for TelnetConfig {
-    fn default() -> Self {
-        TelnetConfig {
-            client_name: String::from("UNKNOWN"),
-            client_version: String::from("UNKNOWN"),
-            encoding: String::from("ascii"),
-            utf8: false,
-            ansi: false,
-            xterm256: false,
-            width: 78,
-            height: 24,
-            gmcp: false,
-            msdp: false,
-            mssp: false,
-            mxp: false,
-            mccp2: false,
-            ttype: false,
-            naws: false,
-            sga: false,
-            linemode: false,
-            force_endline: false,
-            oob: false,
-            tls: false,
-            screen_reader: false,
-            mouse_tracking: false,
-            vt100: false,
-            osc_color_palette: false,
-            proxy: false,
-            truecolor: false,
-            mnes: false
-        }
-    }
-}
-
-impl TelnetConfig {
-    fn capabilities(&self) -> ProtocolCapabilities {
-        let mut cap = ProtocolCapabilities {
-            protocol: Protocol::Telnet,
-            client_name: self.client_name.clone(),
-            client_version: self.client_version.clone(),
-            utf8: self.utf8,
-            html: false,
-            mxp: self.mxp,
-            gmcp: self.gmcp,
-            msdp: self.msdp,
-            mssp: self.mssp,
-            color: 0,
-            width: self.width,
-            height: self.height,
-            screen_reader: self.screen_reader
-        };
-        if self.ansi {
-            cap.color = 1;
-        }
-        if self.xterm256 {
-            cap.color = 2;
-        }
-        cap
-    }
-}
+    map.insert(tc::SGA, TelnetOption {allow_local: true, allow_remote: false, start_remote: false, start_local: true});
+    map.insert(tc::NAWS, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
+    map.insert(tc::MTTS, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
+    //map.insert(tc::MXP, TelnetOption {allow_local: true, allow_remote: true, start_remote: false, start_local: true});
+    map.insert(tc::MSSP, TelnetOption {allow_local: true, allow_remote: false, start_remote: false, start_local: true});
+    //map.insert(tc::MCCP2, TelnetOption {allow_local: true, allow_remote: false, start_remote: false, start_local: true});
+    //map.insert(tc::MCCP3, TelnetOption {allow_local: true, allow_remote: false, start_remote: false, start_local: true});
+    map.insert(tc::GMCP, TelnetOption {allow_local: true, allow_remote: false, start_remote: false, start_local: true});
+    map.insert(tc::MSDP, TelnetOption {allow_local: true, allow_remote: false, start_remote: false, start_local: true});
+    map.insert(tc::LINEMODE, TelnetOption {allow_local: false, allow_remote: true, start_remote: true, start_local: false});
+    map.insert(tc::TELOPT_EOR, TelnetOption {allow_local: true, allow_remote: false, start_remote: false, start_local: true});
+    map
+});
 
 #[derive(Default, Debug, Clone)]
 pub struct TelnetHandshakes {
@@ -163,16 +94,29 @@ impl TelnetHandshakes {
     }
 }
 
+#[derive(Debug)]
+pub struct TelnetTimers {
+    pub last_interval: Instant,
+    pub last_keepalive: Instant,
+}
+
+impl Default for TelnetTimers {
+    fn default() -> Self {
+        Self {
+            last_interval: Instant::now(),
+            last_keepalive: Instant::now()
+        }
+    }
+}
+
 
 pub struct TelnetProtocol<T> {
     // This serves as a higher-level actor that abstracts a bunch of the lower-level
     // nitty-gritty so the Session doesn't need to deal with it.
     conn_id: String,
     op_state: HashMap<u8, TelnetOptionState>,
-    telnet_options: Arc<HashMap<u8, TelnetOption>>,
     addr: SocketAddr,
-    tls: bool,
-    config: TelnetConfig,
+    config: ProtocolCapabilities,
     handshakes_left: TelnetHandshakes,
     ttype_count: u8,
     ttype_last: Option<String>,
@@ -183,23 +127,24 @@ pub struct TelnetProtocol<T> {
     tx_protocol: Sender<Msg2MudProtocol>,
     rx_protocol: Receiver<Msg2MudProtocol>,
     running: bool,
-    app_buffer: BytesMut
+    app_buffer: BytesMut,
+    time_created: Instant,
+    time_activity: Instant,
+    timers: TelnetTimers,
 }
 
 
-impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync {
-    pub fn new(conn_id: String, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>,
-               telnet_options: Arc<HashMap<u8, TelnetOption>>, op_state: HashMap<u8, TelnetOptionState>, handshakes_left: TelnetHandshakes) -> Self {
+impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + Sync {
+    pub fn new(conn_id: String, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>) -> Self {
 
         let (tx_protocol, rx_protocol) = channel(10);
-        Self {
+        let mut out = Self {
             conn_id,
             addr,
-            telnet_options,
-            op_state,
+            op_state: Default::default(),
             conn,
-            config: TelnetConfig::default(),
-            handshakes_left,
+            config: ProtocolCapabilities::default(),
+            handshakes_left: Default::default(),
             tx_portal,
             tx_protocol,
             rx_protocol,
@@ -207,18 +152,21 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             ttype_last: None,
             active: false,
             sent_link: false,
-            tls,
             running: true,
-            app_buffer: BytesMut::with_capacity(1024)
-        }
+            app_buffer: BytesMut::with_capacity(1024),
+            time_created: Instant::now(),
+            time_activity: Instant::now(),
+            timers: Default::default(),
+        };
+        out.config.tls = tls;
+        out
     }
 
     fn make_link(&self) -> ProtocolLink {
         ProtocolLink {
             conn_id: self.conn_id.clone(),
             addr: self.addr.clone(),
-            tls: self.tls,
-            capabilities: self.config.capabilities(),
+            capabilities: self.config.clone(),
             tx_protocol: self.tx_protocol.clone(),
             json_data: Default::default()
         }
@@ -241,28 +189,42 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         self.sent_link = true;
     }
 
-    pub async fn run(&mut self, opening: Bytes) {
+    pub async fn run(&mut self) {
         // Just packing all of this together so it gets sent at once.
-        let _ = self.conn.send(TelnetEvent::Data(opening)).await;
+
         let send_chan = self.tx_protocol.clone();
 
-        // Ready a message to fire off quickly for in case
-        let _ready_task = tokio::spawn(async move {
-            time::sleep(Duration::from_millis(500)).await;
-            let _ = send_chan.send(Msg2MudProtocol::GetReady).await;
-            ()
-        });
+        for (code, tel_op) in TELNET_OPTIONS.iter() {
+
+            let mut state = TelnetOptionState::default();
+            if(tel_op.start_local) {
+                state.local.negotiating = true;
+                let _ = self.conn.send(TelnetEvent::Negotiate(tc::WILL, *code)).await;
+                self.handshakes_left.local.insert(*code);
+            }
+            if(tel_op.start_remote) {
+                state.remote.negotiating = true;
+                let _ = self.conn.send(TelnetEvent::Negotiate(tc::DO, *code)).await;
+                self.handshakes_left.remote.insert(*code);
+            }
+            self.op_state.insert(*code, state);
+
+        }
+
+        let mut interval_timer = IntervalStream::new(time::interval(Duration::from_millis(100)));
 
         while self.running {
             tokio::select! {
                 t_msg = self.conn.next() => {
                     if let Some(msg) = t_msg {
+                        self.time_activity = Instant::now();
                         match msg {
                             Ok(msg) => {
                                 let _ = self.process_telnet_event(msg).await;
                             },
                             Err(e) => {
-                                // Not sure what to do about this yet.
+                                let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id.clone(), String::from("dunno yet"))).await;
+                                self.running = false;
                             }
                         }
                     } else {
@@ -274,19 +236,51 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                     if let Some(msg) = p_msg {
                         let _ = self.process_protocol_message(msg).await;
                     }
+                },
+                i_msg = interval_timer.next() => {
+                    if let Some(ins) = i_msg {
+                        let _ = self.handle_interval_timer(ins.into_std()).await;
+                    }
                 }
             }
         }
+    }
+
+    async fn handle_interval_timer(&mut self, ins: Instant) {
+        // First, handle the case where too much time has passed since the connection
+        // was established. Force handshake completion.
+        if(!self.sent_link) {
+            let _ = self.check_ready();
+            if(!self.sent_link && self.time_created.elapsed().as_millis() > 500) {
+                let _ = self.get_ready();
+            }
+        }
+
+        // Check if the connection has been utterly idle at a network level for too long.
+        if(self.time_activity.elapsed().as_secs() > (60 * 30)) {
+            // handle disconnect here.
+        }
+
+        self.timers.last_interval = ins;
     }
 
     async fn process_telnet_event(&mut self, msg: TelnetEvent) {
         match msg {
             TelnetEvent::SubNegotiate(op, data) => self.receive_sub(op, data).await,
             TelnetEvent::Negotiate(comm, op) => self.receive_negotiate(comm, op).await,
-            TelnetEvent::Command(byte) => {},
+            TelnetEvent::Command(byte) => {
+                let _ = self.process_telnet_command(byte).await;
+            },
             TelnetEvent::Data(data) => {
                 let _ = self.process_telnet_data(data).await;
             }
+        }
+    }
+
+    async fn process_telnet_command(&mut self, byte: u8) {
+        match byte {
+            tc::NOP => {},
+            _ => {}
         }
     }
 
@@ -335,9 +329,6 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             },
             Msg2MudProtocol::ServerStatus(data) => {
                 //let _ = self.conn.send(TelnetEvent::MSSP(data)).await;
-            },
-            Msg2MudProtocol::GetReady => {
-                let _ = self.get_ready().await;
             },
             Msg2MudProtocol::Lines(data) => {
                 for l in data {
@@ -469,7 +460,8 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     async fn enable_remote(&mut self, op: u8) {
         match op {
             tc::NAWS => self.config.naws = true,
-            tc::TTYPE => {
+            tc::MTTS => {
+                self.handshakes_left.ttype.insert(0);
                 self.request_ttype().await;
             },
             tc::LINEMODE => self.config.linemode = true,
@@ -486,7 +478,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                 self.config.width = 78;
                 self.config.height = 24;
             }
-            tc::TTYPE => {
+            tc::MTTS => {
                 self.config.ttype = false;
                 self.handshakes_left.ttype.clear();
             },
@@ -530,7 +522,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             tc::NAWS => {
                 let _ = self.receive_naws(data).await;
             },
-            tc::TTYPE => {
+            tc::MTTS => {
                 let _ = self.receive_ttype(data).await;
             }
             _ => {}
@@ -541,7 +533,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     async fn request_ttype(&mut self) {
         let mut data = BytesMut::with_capacity(1);
         data.put_u8(1);
-        let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::TTYPE, data.freeze())).await;
+        let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MTTS, data.freeze())).await;
     }
 
     async fn receive_ttype(&mut self, mut data: Bytes) {
@@ -619,62 +611,28 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         } else {
             self.config.client_name = data;
         }
+        println!("{:?}", self.config);
 
         // Now that the name and version (may be UNKNOWN) are set... we can deduce capabilities.
         let mut extra_check = false;
         match self.config.client_name.as_str() {
-            "ATLANTIS" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
+            "ATLANTIS" | "CMUD"  | "KILDCLIENT" | "MUDLET" | "MUSHCLIENT"  | "PUTTY" | "BEIP" | "POTATO" | "TINYFUGUE" => {
+                self.config.color = Color::Xterm256;
             },
-            "CMUD" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            },
-            "KILDCLIENT" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            },
-            "MUDLET" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            },
-            "MUSHCLIENT" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            },
-            "PUTTY" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            },
-            "BEIP" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            },
-            "POTATO" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            },
-            "TINYFUGUE" => {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
-            }
             _ => {
                 extra_check = true;
             }
         }
         if extra_check {
-            if self.config.client_name.starts_with("XTERM") || self.config.client_name.ends_with("-256COLOR") {
-                self.config.xterm256 = true;
-                self.config.ansi = true;
+            if (self.config.client_name.starts_with("XTERM") || self.config.client_name.ends_with("-256COLOR")) && self.config.color != Color::TrueColor {
+                self.config.color = Color::Xterm256;
             }
         }
     }
 
     async fn receive_ttype_1(&mut self, data: String) {
-        if data.starts_with("XTERM") || data.ends_with("-256COLOR") {
-            self.config.xterm256 = true;
-            self.config.ansi = true;
+        if (data.starts_with("XTERM") || data.ends_with("-256COLOR")) && self.config.color != Color::TrueColor  {
+            self.config.color = Color::Xterm256;
         }
         self.handshakes_left.ttype.remove(&1);
     }
@@ -689,17 +647,18 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         if mtts == 0 {
             return;
         }
-        if (1 & mtts) == 1 {
-            self.config.ansi = true;
+        if (1 & mtts) == 1 && (self.config.color.clone() as i32) < Color::Ansi as i32 {
+            self.config.color = Color::Ansi;
         }
+
         if (2 & mtts) == 2 {
             self.config.vt100 = true;
         }
         if (4 & mtts) == 4 {
             self.config.utf8 = true;
         }
-        if (8 & mtts) == 8 {
-            self.config.xterm256 = true;
+        if (8 & mtts) == 8 && (self.config.color.clone() as i32) < Color::Xterm256 as i32 {
+            self.config.color = Color::Xterm256;
         }
         if (16 & mtts) == 16 {
             self.config.mouse_tracking = true;
@@ -713,8 +672,8 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         if (128 & mtts) == 128 {
             self.config.proxy = true;
         }
-        if (256 & mtts) == 256 {
-            self.config.truecolor = true;
+        if (256 & mtts) == 256  && (self.config.color.clone() as i32) < Color::TrueColor as i32 {
+            self.config.color = Color::TrueColor;
         }
         if (512 & mtts) == 512 {
             self.config.mnes = true;
@@ -738,7 +697,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     async fn update_capabilities(&mut self) {
         if self.sent_link {
             println!("We did send the link!");
-            let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id.clone(), Msg2PortalFromClient::Capabilities(self.config.capabilities()))).await;
+            let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id.clone(), Msg2PortalFromClient::Capabilities(self.config.clone()))).await;
         } else {
             println!("Did we not send the link?!");
         }

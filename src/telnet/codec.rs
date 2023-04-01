@@ -74,6 +74,10 @@ impl Decoder for TelnetCodec {
             return Ok(None);
         }
 
+        if src.len() > self.max_buffer {
+            return Err(Self::Error::from(io::ErrorKind::OutOfMemory));
+        }
+
         if src[0] == codes::IAC {
             if src.len() > 1 {
                 match src[1] {

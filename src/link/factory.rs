@@ -28,11 +28,11 @@ pub struct LinkProtocolFactory {
 }
 
 impl LinkProtocolFactory {
-    pub fn new(factory_id: String, tx_portal: Sender<Msg2Portal>) -> Self {
+    pub fn new(factory_id: &str, tx_portal: Sender<Msg2Portal>) -> Self {
         let (tx_factory, rx_factory) = channel(50);
 
         Self {
-            factory_id,
+            factory_id: String::from(factory_id),
             tx_factory,
             rx_factory,
             tx_portal,
@@ -52,7 +52,7 @@ impl LinkProtocolFactory {
             if let Some(f_msg) = self.rx_factory.recv().await {
                 match f_msg {
                     Msg2Factory::AcceptTLS(stream, addr) => {
-                        self.accept(stream, addr, true);
+                        self.accept(stream, addr, true).await;
                     },
                     Msg2Factory::AcceptTCP(stream, addr) => {
                         self.accept(stream, addr, false).await;

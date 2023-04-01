@@ -41,5 +41,5 @@ pub const GMCP: u8 = 201;
 // MSDP - Mud Server Data Protocol
 pub const MSDP: u8 = 69;
 
-// TTYPE - Terminal Type
-pub const TTYPE: u8 = 24;
+// MTTS - Terminal Type
+pub const MTTS: u8 = 24;
