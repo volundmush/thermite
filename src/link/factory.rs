@@ -66,7 +66,7 @@ impl LinkProtocolFactory {
     }
 
     async fn accept<C>(&mut self, conn: C, addr: SocketAddr, tls: bool)
-        where C: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync
+        where C: AsyncRead + AsyncWrite + Send + 'static + Unpin + Sync
     {
         match accept_async(conn).await {
             Ok(ws) => {
@@ -80,7 +80,7 @@ impl LinkProtocolFactory {
                                                  self.tx_portal.clone(), rx_link);
                 let link = LinkStub {
                     addr: addr.clone(),
-                    conn_id: conn_id,
+                    conn_id,
                     tls,
                     tx_link
                 };

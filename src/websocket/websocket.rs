@@ -26,9 +26,6 @@ impl WebSocketProtocol {
     }
 }
 
-pub struct WebSocketProtocolFactory {
-
-}
 
 pub struct WebSocketProtocolFactory {
     factory_id: String,

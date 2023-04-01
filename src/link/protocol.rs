@@ -193,7 +193,7 @@ pub struct LinkProtocol<T> {
     json_data: JsonValue
 }
 
-impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + std::marker::Sync {
+impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + Sync {
     pub fn new(conn_id: String, conn: WebSocketStream<T>, addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>, rx_link: Receiver<Msg2Link>) -> Self {
 
         Self {

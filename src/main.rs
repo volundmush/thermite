@@ -58,7 +58,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let _ = tokio::spawn(async move {listen.run().await});
-    let _ = portal.start_timer().await;
     let portal_task = tokio::spawn(async move {portal.run().await});
 
     let _ = portal_task.await;

@@ -151,13 +151,6 @@ impl ProtocolLink {
     }
 }
 
-
-// Feed one of these to the ListenManager to implement a connection filter.
-#[async_trait::async_trait]
-pub trait ListenManagerFilter {
-    async fn check(&mut self, addr: &SocketAddr) -> bool;
-}
-
 pub enum Msg2Listener {
     Kill
 }
@@ -323,20 +316,15 @@ impl ListenManager {
             return;
         }
 
-        let tls_bool = tls.is_some();
-
         let mut listener = Listener::new(listener, tls.clone(), listen_id, self.tx_listenmanager.clone(), protocol);
         let tx_listener = listener.tx_listener.clone();
 
-        let handle = tokio::spawn(async move {listener.run().await});
-
-        let listen_link = ListenerLink {
+        self.listeners.insert(String::from(listen_id), ListenerLink {
             listen_id: String::from(listen_id),
             factory: String::from(protocol),
-            handle,
+            handle: tokio::spawn(async move {listener.run().await}),
             tx_listener,
-            tls: tls_bool
-        };
-        self.listeners.insert(String::from(listen_id), listen_link);
+            tls: tls.is_some()
+        });
     }
 }

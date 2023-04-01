@@ -190,10 +190,8 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     }
 
     pub async fn run(&mut self) {
-        // Just packing all of this together so it gets sent at once.
 
-        let send_chan = self.tx_protocol.clone();
-
+        // Initialize Telnet Op handlers.
         for (code, tel_op) in TELNET_OPTIONS.iter() {
 
             let mut state = TelnetOptionState::default();
