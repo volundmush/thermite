@@ -88,16 +88,16 @@ pub async fn run_external_handler(
     tx_portal: Sender<Msg2Portal>
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(tls_acceptor) = tls_option.as_ref() {
-        let hello_status = timeout(Duration::from_millis(50), async {
+        let hello_status = match timeout(Duration::from_millis(50), async {
             let mut buffer = vec![0; 5];
 
             loop {
-                stream.peek(&mut buffer).await?;
+                stream.peek(&mut buffer).await.expect("TODO: panic message");
 
                 let status = check_tls_client_hello(&buffer);
                 match status {
                     ClientHelloStatus::Complete | ClientHelloStatus::Invalid => {
-                        break Ok(status);
+                        break status;
                     }
                     ClientHelloStatus::Partial => {
                         // Yield the current task to prevent a busy loop
@@ -105,11 +105,14 @@ pub async fn run_external_handler(
                     }
                 }
             }
-        }).await;
+        }).await {
+            Ok(status) => status,
+            Err(_) => ClientHelloStatus::Invalid
+        };
 
         match hello_status {
-            Ok(Ok(ClientHelloStatus::Complete)) => {
-                let mut tls_stream = tls_acceptor.as_ref().accept(stream).await?;
+            ClientHelloStatus::Complete => {
+                let tls_stream = tls_acceptor.as_ref().accept(stream).await?;
 
                 handle_external_connection(addr, tls_stream, true, tx_portal).await?;
             }
@@ -131,7 +134,7 @@ static CONNECTION_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub async fn handle_external_connection<S>(
     addr: SocketAddr,
-    socket: S,
+    mut socket: S,
     tls_engaged: bool,
     tx_portal: Sender<Msg2Portal>
 ) -> Result<(), Box<dyn std::error::Error>>
