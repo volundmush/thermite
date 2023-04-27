@@ -23,20 +23,21 @@ use futures::{
     stream::{StreamExt}
 };
 
-
 use serde_json::Value as JsonValue;
 
 use once_cell::sync::Lazy;
 
 use crate::{
-    telnet::{
-        codec::{TelnetCodec, TelnetEvent},
-        codes as tc
+    protocols::{
+        telnet::{
+            codec::{TelnetCodec, TelnetEvent},
+            codes as tc
+        },
+        {ProtocolCapabilities, Color, ProtocolLink}
     },
-    net::{Msg2MudProtocol, ProtocolLink, ProtocolCapabilities, Protocol},
-    portal::{Msg2Portal, Msg2PortalFromClient}
+    msg::{Msg2MudProtocol, Msg2Portal, Msg2PortalFromClient},
 };
-use crate::net::Color;
+
 
 
 #[derive(Default, Clone)]
@@ -113,7 +114,7 @@ impl Default for TelnetTimers {
 pub struct TelnetProtocol<T> {
     // This serves as a higher-level actor that abstracts a bunch of the lower-level
     // nitty-gritty so the Session doesn't need to deal with it.
-    conn_id: String,
+    conn_id: usize,
     op_state: HashMap<u8, TelnetOptionState>,
     addr: SocketAddr,
     config: ProtocolCapabilities,
@@ -135,7 +136,7 @@ pub struct TelnetProtocol<T> {
 
 
 impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + Sync {
-    pub fn new(conn_id: String, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>) -> Self {
+    pub fn new(conn_id: usize, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>) -> Self {
 
         let (tx_protocol, rx_protocol) = channel(10);
         let mut out = Self {
@@ -164,11 +165,10 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
 
     fn make_link(&self) -> ProtocolLink {
         ProtocolLink {
-            conn_id: self.conn_id.clone(),
+            conn_id: self.conn_id,
             addr: self.addr.clone(),
             capabilities: self.config.clone(),
-            tx_protocol: self.tx_protocol.clone(),
-            json_data: Default::default()
+            tx_protocol: self.tx_protocol.clone()
         }
     }
 
@@ -221,12 +221,12 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                                 let _ = self.process_telnet_event(msg).await;
                             },
                             Err(e) => {
-                                let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id.clone(), String::from("dunno yet"))).await;
+                                let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id, String::from("dunno yet"))).await;
                                 self.running = false;
                             }
                         }
                     } else {
-                        let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id.clone(), String::from("dunno yet"))).await;
+                        let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id, String::from("dunno yet"))).await;
                         self.running = false;
                     }
                 },
@@ -298,7 +298,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             if cmd.starts_with("//") {
                 let _ = self.handle_protocol_command(cmd);
             } else if self.sent_link {
-                let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id.clone(), Msg2PortalFromClient::Line(cmd))).await;
+                let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id, Msg2PortalFromClient::Line(cmd))).await;
             }
         }
     }

@@ -1,66 +1,73 @@
-use tokio::{
-    net::TcpListener
-};
-
 use std::{
     error::Error,
-    net::{SocketAddr}
+    net::{IpAddr, SocketAddr},
+    path::{PathBuf}
 };
+use tokio::select;
+use tokio::sync::mpsc::{Sender, Receiver, channel};
+use clap::{App, Arg};
 
 use thermite::{
-    config::{Config},
-    net::{ListenManager},
-    telnet::{
-        factory::TelnetProtocolFactory
-    },
-    link::{
-        factory::LinkProtocolFactory
-    },
-    portal::{Portal}
+    networking::{
+        internal::InternalAcceptor,
+        external::ExternalAcceptor
+    }
 };
+use thermite::msg::Msg2Portal;
+use thermite::portal::Portal;
 
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let conf = Config::from_file(String::from("config.toml"))?;
+    let matches = App::new("Thermite")
+        .version("0.1")
+        .author("Andrew Bastien <volundmush@gmail.com>")
+        .about("A networking portal for MUDs.")
+        .arg(
+            Arg::new("i")
+                .long("i")
+                .value_name("ip:port")
+                .about("Sets the internal IpAddr and u16 port for IPC")
+                .default_value("127.0.0.1:7000")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::new("e")
+                .long("e")
+                .value_name("ip:port")
+                .about("Sets the external IpAddr and u16 port")
+                .default_value("0.0.0.0:7999")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::new("pem")
+                .long("pem")
+                .value_name("path")
+                .about("Sets the file path to a .pem file for TLS")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::new("key")
+                .long("key")
+                .value_name("path")
+                .about("Sets the file path to a .key file for TLS")
+                .takes_value(true),
+        )
+        .get_matches();
 
-    //let mut tls: HashMap<String, TlsAcceptor> = HashMap::with_capacity(conf.tls.len());
-    for (k, v) in conf.tls.iter() {
-        // I'll worry about this later..
-    }
+    let internal_addr: SocketAddr = matches.value_of("i")?.parse()?;
+    let external_addr: SocketAddr = matches.value_of("e")?.parse()?;
+    let pem_path: Option<PathBuf> = matches.value_of("pem").map(PathBuf::from);
+    let key_path: Option<PathBuf> = matches.value_of("key").map(PathBuf::from);
 
+    let mut internal_acceptor = InternalAcceptor::new(internal_addr);
     let mut portal = Portal::new();
-    let tx_portal = portal.tx_portal.clone();
-    //let prot_task = tokio::spawn(async move {prot_manager.run().await});
+    let mut external_acceptor = ExternalAcceptor::new(external_addr, pem_path, key_path, portal.tx_portal.clone());
 
-    let mut listen = ListenManager::new();
-
-    let mut telnet_factory = TelnetProtocolFactory::new("telnet", tx_portal.clone());
-    listen.register_factory(telnet_factory.link());
-    let _ = tokio::spawn(async move {telnet_factory.run().await});
-
-    let mut link_factory = LinkProtocolFactory::new("link", tx_portal.clone());
-    listen.register_factory(link_factory.link());
-    let _ = tokio::spawn(async move {link_factory.run().await});
-
-
-    for (k, v) in conf.listeners.iter() {
-
-        let addr = conf.interfaces.get(&v.interface).expect("Telnet Server attempting to use non-existent interface!");
-        let sock = SocketAddr::new(addr.clone(), v.port);
-        let listener = TcpListener::bind(sock).await.expect("Could not bind server port... is it in use?");
-
-        if let Some(tls_key) = &v.tls {
-            // Will worry about TLS later...
-        } else {
-            listen.listen(k, listener, None, &v.protocol.clone());
-        }
+    select! {
+        _ = internal_acceptor.run() => {},
+        _ = external_acceptor.run() => {}
     }
-
-    let _ = tokio::spawn(async move {listen.run().await});
-    let portal_task = tokio::spawn(async move {portal.run().await});
-
-    let _ = portal_task.await;
 
     Ok(())
 }

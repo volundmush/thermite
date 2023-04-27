@@ -14,27 +14,13 @@ use serde_json::Value as JsonValue;
 
 use futures::{StreamExt, SinkExt};
 
-use crate::{
-    portal::{Msg2Portal, Msg2PortalFromLink},
-    net::{Msg2MudProtocol, ProtocolCapabilities, ProtocolLink, ProtocolData}
-};
+
 
 use tokio_tungstenite::WebSocketStream;
 use tungstenite::protocol::Message as WsMessage;
+use crate::msg::{Msg2Link, Msg2MudProtocol, Msg2Portal, Msg2PortalFromLink};
+use crate::protocols::{ProtocolCapabilities, ProtocolData};
 
-pub enum Msg2Link {
-    Kill,
-    Replaced,
-    ClientReady(ProtocolLink),
-    ClientDisconnected(String, String),
-    ClientCapabilities(String, ProtocolCapabilities),
-    ClientLines(String, Vec<String>),
-    ClientLine(String, String),
-    ClientGMCP(String, String, JsonValue),
-    ClientList(HashMap<String, ProtocolLink>),
-    PortalJson(JsonValue),
-    ClientJson(String, JsonValue)
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ServerMsgSessionLines {
