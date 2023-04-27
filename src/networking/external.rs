@@ -17,6 +17,7 @@ use tokio::{
 };
 
 use tokio_rustls::rustls;
+use tokio_rustls::{TlsStream, TlsAcceptor};
 
 use tokio_rustls::rustls::{
     Certificate, PrivateKey, ServerConfig,
@@ -36,15 +37,15 @@ use crate::util::{ClientHelloStatus, check_tls_client_hello, check_http_request,
 
 pub struct ExternalAcceptor {
     listener: TcpListener,
-    tls_config: Option<Arc<ServerConfig>>,
+    tls_acceptor: Option<Arc<TlsAcceptor>>,
     tx_portal: Sender<Msg2Portal>
 }
 
 impl ExternalAcceptor {
-    pub fn new(addr: SocketAddr, pem: Option<PathBuf>, key: Option<PathBuf>, tx_portal: Sender<Msg2Portal>) -> ExternalAcceptor {
-        let listener = TcpListener::bind(addr).unwrap();
+    pub async fn new(addr: SocketAddr, pem: Option<PathBuf>, key: Option<PathBuf>, tx_portal: Sender<Msg2Portal>) -> ExternalAcceptor {
+        let listener = TcpListener::bind(addr).await.unwrap();
 
-        let tls_config = if pem.is_some() && key.is_some() {
+        let tls_acceptor = if pem.is_some() && key.is_some() {
             let cert_file = File::open(pem.unwrap().to_str().unwrap()).unwrap();
             let cert_reader = BufReader::new(cert_file);
             let certs = Certificate::from_pem(cert_reader).unwrap();
@@ -56,14 +57,15 @@ impl ExternalAcceptor {
 
             let mut config = ServerConfig::new(NoClientAuth::new());
             config.set_single_cert(certs, key).unwrap();
-            Some(Arc::new(config))
+            let mut tls_acceptor = TlsAcceptor::from(config);
+            Some(Arc::new(tls_acceptor))
         } else {
             None
         };
 
         ExternalAcceptor {
             listener,
-            tls_config,
+            tls_acceptor,
             tx_portal
         }
     }
@@ -72,7 +74,7 @@ impl ExternalAcceptor {
         loop {
             let (stream, addr) = self.listener.accept().await?;
             tokio::spawn(async move {
-                run_external_handler(addr, self.tls_config.clone(), stream, self.tx_portal.clone()).await;
+                run_external_handler(addr, self.tls_acceptor.clone(), stream, self.tx_portal.clone()).await;
             });
         }
     }
@@ -81,11 +83,11 @@ impl ExternalAcceptor {
 
 pub async fn run_external_handler(
     addr: SocketAddr,
-    tls_option: Option<Arc<ServerConfig>>,
+    tls_option: Option<Arc<TlsAcceptor>>,
     stream: TcpStream,
     tx_portal: Sender<Msg2Portal>
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(tls_config) = tls_option.as_ref() {
+    if let Some(tls_acceptor) = tls_option.as_ref() {
         let hello_status = timeout(Duration::from_millis(50), async {
             let mut buffer = vec![0; 5];
 
@@ -107,9 +109,7 @@ pub async fn run_external_handler(
 
         match hello_status {
             Ok(Ok(ClientHelloStatus::Complete)) => {
-                let tls_config = tls_config.clone();
-                let session = rustls::ServerSession::new(&tls_config);
-                let mut tls_stream = tokio_rustls::TlsStream::new(stream, session).await?;
+                let mut tls_stream = tls_acceptor.as_ref().accept(stream).await?;
 
                 handle_external_connection(addr, tls_stream, true, tx_portal).await?;
             }
@@ -183,7 +183,7 @@ pub async fn handle_http<S>(
     tx_portal: Sender<Msg2Portal>
 ) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
+        S: AsyncRead + AsyncWrite + AsyncReadExt + Unpin + Send + Sync + 'static,
 {
     // Same code as in the original ExternalHandler::handle_http()
     Ok(())
@@ -197,7 +197,7 @@ pub async fn handle_telnet<S>(
     tx_portal: Sender<Msg2Portal>
 ) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
+        S: AsyncRead + AsyncWrite + AsyncReadExt + Unpin + Send + Sync + 'static,
 {
 
     let telnet_codec = Framed::new(socket, TelnetCodec::new(8192));

@@ -16,8 +16,8 @@ pub struct InternalAcceptor {
 }
 
 impl InternalAcceptor {
-    pub fn new(addr: SocketAddr, tx_portal: Sender<Msg2Portal>) -> InternalAcceptor {
-        let listener = TcpListener::bind(addr).unwrap();
+    pub async fn new(addr: SocketAddr, tx_portal: Sender<Msg2Portal>) -> InternalAcceptor {
+        let listener = TcpListener::bind(addr).await.unwrap();
         InternalAcceptor {
             listener,
             tx_portal

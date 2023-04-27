@@ -60,9 +60,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pem_path: Option<PathBuf> = matches.value_of("pem").map(PathBuf::from);
     let key_path: Option<PathBuf> = matches.value_of("key").map(PathBuf::from);
 
-    let mut internal_acceptor = InternalAcceptor::new(internal_addr);
+    let mut internal_acceptor = InternalAcceptor::new(internal_addr, portal.tx_portal.clone()).await;
     let mut portal = Portal::new();
-    let mut external_acceptor = ExternalAcceptor::new(external_addr, pem_path, key_path, portal.tx_portal.clone());
+    let mut external_acceptor = ExternalAcceptor::new(external_addr, pem_path, key_path, portal.tx_portal.clone()).await;
 
     select! {
         _ = internal_acceptor.run() => {},
