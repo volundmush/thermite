@@ -139,6 +139,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     pub fn new(conn_id: usize, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>) -> Self {
 
         let (tx_protocol, rx_protocol) = channel(10);
+        // It reaches here! a println!() works.
         let mut out = Self {
             conn_id,
             addr,
@@ -159,6 +160,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             time_activity: Instant::now(),
             timers: Default::default(),
         };
+        // Stack overflow before reaching this point.
         out.config.tls = tls;
         out
     }

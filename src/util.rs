@@ -32,6 +32,7 @@ pub fn generate_id(count: usize, existing: &HashSet<String>) -> String {
     new_id
 }
 
+#[derive(Clone, Debug)]
 pub enum ClientHelloStatus {
     Complete,
     Partial,
