@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap},
     time::{Duration, Instant}
 };
+use std::error::Error;
 
 use tokio::{
     sync::mpsc::{Sender, Receiver, channel},
@@ -17,6 +18,7 @@ use futures::{
     sink::{SinkExt},
     stream::{StreamExt}
 };
+use tokio::task::yield_now;
 
 use crate::{
     protocols::link::protocol::{LinkStub}
@@ -42,4 +44,12 @@ impl Portal {
             link: Default::default()
         }
     }
+
+    pub async fn run(&mut self) {
+        // this currently does nothing. But it'll do something eventually.
+        loop {
+            yield_now().await;
+        }
+    }
+
 }

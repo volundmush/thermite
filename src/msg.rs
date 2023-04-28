@@ -39,8 +39,8 @@ pub enum Msg2Portal {
     ClientDisconnected(usize, String),
     FromClient(usize, Msg2PortalFromClient),
     LinkConnected(LinkStub),
-    LinkDisconnected(String, String),
-    FromLink(String, Msg2PortalFromLink),
+    LinkDisconnected(usize, String),
+    FromLink(usize, Msg2PortalFromLink),
 }
 
 
