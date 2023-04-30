@@ -5,6 +5,7 @@ use std::{
 };
 
 use std::sync::Arc;
+use tokio::runtime::Builder;
 use tokio::select;
 use tokio::sync::mpsc::{Sender, Receiver, channel};
 use clap::{Parser, Arg};
@@ -17,7 +18,7 @@ use tokio_rustls::TlsAcceptor;
 
 use thermite::{
     networking::{
-        link::InternalAcceptor,
+        link::LinkAcceptor,
         telnet::TelnetAcceptor
     }
 };
@@ -43,8 +44,8 @@ pub struct Args {
     pub key: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+
+async fn run() -> Result<(), Box<dyn Error>> {
     let args: Args = Args::parse();
 
     let tls_acceptor = if args.pem.is_some() && args.key.is_some() {
@@ -53,20 +54,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None
     };
 
-    let portal = Portal::new();
+
+    let mut portal = Portal::new();
 
     let mut v = Vec::new();
 
-    //let mut link_acceptor = InternalAcceptor::new(internal_addr, portal.tx_portal.clone()).await;
-    //v.push(link_acceptor.run());
+    let mut link_acceptor = LinkAcceptor::new(args.link, portal.tx_portal.clone()).await?;
+    let link_join = tokio::spawn(async move {
+        link_acceptor.run().await
+    });
+    v.push(link_join);
     let mut telnet_acceptor = TelnetAcceptor::new(args.telnet, tls_acceptor.clone(), portal.tx_portal.clone()).await?;
     let telnet_join = tokio::spawn(async move {
         telnet_acceptor.run().await
     });
-
     v.push(telnet_join);
+
+    let portal_join = tokio::spawn(async move {
+        portal.run().await
+    });
+    v.push(portal_join);
 
     join_all(v).await;
 
     Ok(())
+}
+
+fn main() {
+    let runtime = Builder::new_multi_thread()
+        .thread_stack_size(12 * 1024 * 1024) // Set the stack size for each worker thread to 4 MB
+        .enable_all()
+        .build()
+        .unwrap();
+
+    runtime.block_on(run());
 }

@@ -10,6 +10,21 @@ use std::{
 };
 
 
+pub fn ensure_crlf(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut prev_char_is_cr = false;
+
+    for c in input.chars() {
+        if c == '\n' && !prev_char_is_cr {
+            result.push('\r');
+        }
+        prev_char_is_cr = c == '\r';
+        result.push(c);
+    }
+
+    result
+}
+
 pub fn random_alphanum(length: usize) -> String {
     let mut rng = thread_rng();
     let chars: String = iter::repeat(())

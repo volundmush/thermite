@@ -116,23 +116,23 @@ impl TelnetHandler {
                 ClientHelloStatus::Complete => {
                     let tls_stream = tls_acceptor.as_ref().accept(stream).await?;
 
-                    self.handle_telnet_connection(BufStream::new(tls_stream), true).await?;
+                    self.handle_telnet_connection(tls_stream, true).await?;
                 }
                 _ => {
                     // Invalid or timeout reached
                     // Handle non-TLS or invalid connections
-                    self.handle_telnet_connection(BufStream::new(stream), false).await?;
+                    self.handle_telnet_connection(stream, false).await?;
                 }
             }
         } else {
             // No ServerConfig provided, handle the connection as a non-TLS connection
-            self.handle_telnet_connection(BufStream::new(stream), false).await?;
+            self.handle_telnet_connection(stream, false).await?;
         }
 
         Ok(())
     }
 
-    pub async fn handle_telnet_connection<S>(&mut self, mut socket: BufStream<S>,tls_engaged: bool) -> Result<(), Box<dyn std::error::Error>>
+    pub async fn handle_telnet_connection<S>(&mut self, mut socket: S,tls_engaged: bool) -> Result<(), Box<dyn std::error::Error>>
         where
             S: AsyncRead + AsyncReadExt + AsyncWrite + Unpin + Send + Sync + 'static,
     {

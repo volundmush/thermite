@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use crate::msg::Msg2MudProtocol;
 
@@ -43,7 +44,7 @@ pub enum Protocol {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Color {
     NoColor = 0,
-    Ansi = 1,
+    Standard = 1,
     Xterm256 = 2,
     TrueColor = 3
 }
@@ -64,9 +65,7 @@ pub struct ProtocolCapabilities {
     pub mssp: bool,
     pub mxp: bool,
     pub mccp2: bool,
-    pub mccp2_enable: bool,
     pub mccp3: bool,
-    pub mccp3_enable: bool,
     pub ttype: bool,
     pub naws: bool,
     pub sga: bool,
@@ -90,7 +89,29 @@ impl Default for ProtocolCapabilities {
             height: 24,
             client_name: "UNKNOWN".to_string(),
             client_version: "UNKNOWN".to_string(),
-            ..Default::default()
+            encoding: Default::default(),
+            utf8: false,
+            color: Color::NoColor,
+            encryption: false,
+            gmcp: false,
+            msdp: false,
+            mssp: false,
+            mxp: false,
+            mccp2: false,
+            mccp3: false,
+            ttype: false,
+            naws: false,
+            sga: false,
+            linemode: false,
+            force_endline: false,
+            oob: false,
+            tls: false,
+            screen_reader: false,
+            mouse_tracking: false,
+            vt100: false,
+            osc_color_palette: false,
+            proxy: false,
+            mnes: false
         }
     }
 }
