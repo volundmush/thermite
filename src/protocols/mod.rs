@@ -1,13 +1,22 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use crate::msg::Msg2MudProtocol;
 
 use serde::{Serialize, Deserialize};
+use serde_json::Value as JsonValue;
 
 pub mod link;
 pub mod telnet;
 // pub mod websocket;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MudData {
+    pub cmd: String,
+    pub args: Vec<JsonValue>,
+    pub kwargs: HashMap<String, JsonValue>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolData {

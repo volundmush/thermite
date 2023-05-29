@@ -18,52 +18,7 @@ use futures::{StreamExt, SinkExt};
 use tokio_tungstenite::WebSocketStream;
 use tungstenite::protocol::Message as WsMessage;
 use crate::msg::{Msg2Link, Msg2MudProtocol, Msg2Portal, Msg2PortalFromLink};
-use crate::protocols::{ProtocolCapabilities, ProtocolData};
-
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionLines {
-    pub kind: String,
-    pub id: usize,
-    pub lines: Vec<String>
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionLine {
-    pub kind: String,
-    pub id: usize,
-    pub line: String
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionText {
-    pub kind: String,
-    pub id: usize,
-    pub text: String
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionGMCP {
-    pub kind: String,
-    pub id: usize,
-    pub gmcp_cmd: String,
-    pub gmcp_data: Option<JsonValue>
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionMSSP {
-    pub kind: String,
-    pub id: usize,
-    pub mssp: Vec<(String, String)>
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionPrompt {
-    pub kind: String,
-    pub id: usize,
-    pub prompt: String
-}
-
+use crate::protocols::{ProtocolCapabilities, ProtocolData, MudData};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ServerMsgSessionDisconnect {
@@ -72,12 +27,6 @@ pub struct ServerMsgSessionDisconnect {
     pub reason: String
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionJson {
-    pub kind: String,
-    pub id: usize,
-    pub data: JsonValue
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ServerMsgRequestCapabilities {
@@ -112,43 +61,17 @@ pub struct PortalMsgDisconnected {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PortalMsgLine {
+pub struct PortalMsgMudData {
     pub kind: String,
     pub id: usize,
-    pub line: String
+    pub data: Vec<MudData>
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PortalMsgGMCP {
-    pub kind: String,
-    pub id: usize,
-    pub gmcp_cmd: String,
-    pub gmcp_data: Option<JsonValue>
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PortalMsgClientData {
     pub kind: String,
     pub data: HashMap<usize, ProtocolData>
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PortalMsgMSSPRequest {
-    pub kind: String,
-    pub id: usize,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PortalMsgJson {
-    pub kind: String,
-    pub data: JsonValue
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PortalMsgClientJson {
-    pub kind: String,
-    pub id: usize,
-    pub data: JsonValue
 }
 
 
@@ -167,8 +90,7 @@ pub struct LinkProtocol<T> {
     conn: WebSocketStream<T>,
     tx_portal: Sender<Msg2Portal>,
     rx_link: Receiver<Msg2Link>,
-    running: bool,
-    json_data: JsonValue
+    running: bool
 }
 
 impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + Sync {
@@ -181,8 +103,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
             tx_portal,
             rx_link,
             tls,
-            running: true,
-            json_data: Default::default()
+            running: true
         }
     }
 
@@ -227,6 +148,16 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     let _ = self.conn.send(WsMessage::Text(j)).await;
                 }
             },
+            Msg2Link::ClientData(id, data) => {
+                let out = PortalMsgMudData {
+                    kind: String::from("client_data"),
+                    id,
+                    data
+                };
+                if let Ok(j) = serde_json::to_string(&out) {
+                    let _ = self.conn.send(WsMessage::Text(j)).await;
+                }
+            },
             Msg2Link::ClientDisconnected(id, reason) => {
                 let out = PortalMsgDisconnected {
                     kind: String::from("client_disconnected"),
@@ -248,27 +179,6 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     let _ = self.conn.send(WsMessage::Text(j)).await;
                 } else {
                     println!("Was there a serialize error?");
-                }
-            },
-            Msg2Link::ClientLine(id, line) => {
-                let out = PortalMsgLine {
-                    kind: String::from("client_line"),
-                    id,
-                    line
-                };
-                if let Ok(j) = serde_json::to_string(&out) {
-                    let _ = self.conn.send(WsMessage::Text(j)).await;
-                }
-            },
-            Msg2Link::ClientGMCP(id, cmd, data) => {
-                let out = PortalMsgGMCP {
-                    kind: String::from("client_gmcp"),
-                    id,
-                    gmcp_cmd: cmd,
-                    gmcp_data: data
-                };
-                if let Ok(j) = serde_json::to_string(&out) {
-                    let _ = self.conn.send(WsMessage::Text(j)).await;
                 }
             },
             Msg2Link::ClientList(data) => {
@@ -309,24 +219,9 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
         let t = &msg["kind"];
         if let Some(s) = t.as_str() {
             match s {
-                "session_text" => {
-                    if let Ok(p) = serde_json::from_value::<ServerMsgSessionText>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::Text(p.text)))).await;
-                    }
-                },
-                "session_gmcp" => {
-                    if let Ok(p) = serde_json::from_value::<ServerMsgSessionGMCP>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::GMCP(p.gmcp_cmd.clone(), p.gmcp_data)))).await;
-                    }
-                },
-                "session_mssp" => {
-                    if let Ok(p) = serde_json::from_value::<ServerMsgSessionMSSP>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::ServerStatus(p.mssp)))).await;
-                    }
-                },
-                "session_prompt" => {
-                    if let Ok(p) = serde_json::from_value::<ServerMsgSessionPrompt>(msg.clone()) {
-                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientMessage(p.id.clone(), Msg2MudProtocol::Prompt(p.prompt)))).await;
+                "client_data" => {
+                    if let Ok(p) = serde_json::from_value::<PortalMsgMudData>(msg.clone()) {
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientMessage(p.id.clone(), p.data))).await;
                     }
                 },
                 _ => {

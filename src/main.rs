@@ -16,6 +16,9 @@ use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::rustls::server::NoClientAuth;
 use tokio_rustls::TlsAcceptor;
 
+use tracing::{info, Level};
+use tracing_subscriber;
+
 use thermite::{
     networking::{
         link::LinkAcceptor,
@@ -46,6 +49,12 @@ pub struct Args {
 
 
 async fn run() -> Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .init();
+
+    info!("Thermite starting up...");
+
     let args: Args = Args::parse();
 
     let tls_acceptor = if args.pem.is_some() && args.key.is_some() {
@@ -53,30 +62,38 @@ async fn run() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
+    //info!("TLS Acceptor: {:?}", tls_acceptor);
 
 
     let mut portal = Portal::new();
 
     let mut v = Vec::new();
 
+    info!("Starting up networking...");
+    info!("Starting up link acceptor on {}...", args.link);
     let mut link_acceptor = LinkAcceptor::new(args.link, portal.tx_portal.clone()).await?;
     let link_join = tokio::spawn(async move {
         link_acceptor.run().await
     });
     v.push(link_join);
+    info!("Starting up telnet acceptor on {}...", args.telnet);
     let mut telnet_acceptor = TelnetAcceptor::new(args.telnet, tls_acceptor.clone(), portal.tx_portal.clone()).await?;
     let telnet_join = tokio::spawn(async move {
         telnet_acceptor.run().await
     });
     v.push(telnet_join);
 
+
+    info!("Starting up portal...");
     let portal_join = tokio::spawn(async move {
         portal.run().await
     });
     v.push(portal_join);
 
+    info!("Starting all tasks...");
     join_all(v).await;
 
+    info!("Thermite shutting down.");
     Ok(())
 }
 

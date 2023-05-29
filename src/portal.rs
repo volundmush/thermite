@@ -24,7 +24,7 @@ use crate::{
     protocols::link::protocol::{LinkStub}
 };
 use crate::msg::{Msg2Link, Msg2MudProtocol, Msg2Portal, Msg2PortalFromClient, Msg2PortalFromLink};
-use crate::protocols::ProtocolLink;
+use crate::protocols::{ProtocolLink, MudData};
 
 
 pub struct Portal {
@@ -70,7 +70,12 @@ impl Portal {
 
     async fn message_all_clients(&mut self, msg: &str) {
         for (conn_id, client) in self.clients.iter_mut() {
-            let _ = client.tx_protocol.send(Msg2MudProtocol::Text(msg.to_string())).await;
+            let m = MudData {
+                cmd: "text".to_string(),
+                args: vec![JsonValue::String(msg.to_string())],
+                kwargs: Default::default()
+            };
+            let _ = client.tx_protocol.send(Msg2MudProtocol::Data(vec![m])).await;
         }
     }
 
@@ -92,14 +97,9 @@ impl Portal {
                                 let _ = link.tx_link.send(Msg2Link::ClientCapabilities(conn_id, capa)).await;
                             }
                         }
-                        Msg2PortalFromClient::Line(txt) => {
+                        Msg2PortalFromClient::Data(data) => {
                             if let Some(link) = self.link.as_mut() {
-                                let _ = link.tx_link.send(Msg2Link::ClientLine(conn_id, txt)).await;
-                            }
-                        }
-                        Msg2PortalFromClient::GMCP(cmd, data) => {
-                            if let Some(link) = self.link.as_mut() {
-                                let _ = link.tx_link.send(Msg2Link::ClientGMCP(conn_id, cmd, data)).await;
+                                let _ = link.tx_link.send(Msg2Link::ClientData(conn_id, data)).await;
                             }
                         }
                     }
@@ -109,7 +109,7 @@ impl Portal {
                 match m {
                     Msg2PortalFromLink::ClientMessage(client_id, m2) => {
                         if let Some(client) = self.clients.get_mut(&client_id) {
-                            let _ = client.tx_protocol.send(m2).await;
+                            let _ = client.tx_protocol.send(Msg2MudProtocol::Data(m2)).await;
                         }
                     }
                     Msg2PortalFromLink::ClientDisconnected(client_id) => {
@@ -129,7 +129,12 @@ impl Portal {
                 if let Some(link) = self.link.as_mut() {
                     let _ = link.tx_link.send(Msg2Link::ClientReady(stub)).await;
                 } else {
-                    let _ = stub.tx_protocol.send(Msg2MudProtocol::Text("Portal awaiting connection from game server...\r\n".to_string())).await;
+                    let m = MudData {
+                        cmd: "text".to_string(),
+                        args: vec![JsonValue::String("Portal awaiting connection from game server...\r\n".to_string())],
+                        kwargs: Default::default()
+                    };
+                    let _ = stub.tx_protocol.send(Msg2MudProtocol::Data(vec![m])).await;
                 }
             },
             Msg2Portal::LinkConnected(stub) => {

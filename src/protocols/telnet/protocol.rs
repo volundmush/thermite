@@ -35,7 +35,7 @@ use crate::{
             codec::{TelnetCodec, TelnetEvent},
             codes as tc
         },
-        {ProtocolCapabilities, Color, ProtocolLink}
+        {ProtocolCapabilities, Color, ProtocolLink, MudData}
     },
     msg::{Msg2MudProtocol, Msg2Portal, Msg2PortalFromClient},
     util::ensure_crlf
@@ -301,13 +301,19 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             if cmd.starts_with("//") {
                 let _ = self.handle_protocol_command(cmd);
             } else if self.sent_link {
-                let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id, Msg2PortalFromClient::Line(cmd))).await;
+                // We must format the command as a Msg2PortalFromClient::Data, so we must encapsulate this in a MudData.
+                let d = MudData {
+                    cmd: String::from("text"),
+                    args: vec![JsonValue::String(cmd)],
+                    kwargs: Default::default(),
+                };
+                let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id, Msg2PortalFromClient::Data(vec![d]))).await;
             }
         }
     }
 
     async fn handle_protocol_command(&mut self, cmd: String) {
-
+        // TODO: Handle protocol commands
     }
 
     async fn process_protocol_message(&mut self, msg: Msg2MudProtocol) {
@@ -315,18 +321,66 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             Msg2MudProtocol::Disconnect => {
                 self.running = false;
             },
-            Msg2MudProtocol::Text(l) => {
-                let _ = self.conn.send(TelnetEvent::Data(Bytes::from(ensure_crlf(&l)))).await;
+            Msg2MudProtocol::Data(v) => {
+                for d in v {
+                    let _ = self.process_protocol_message_data(d).await;
+                }
             },
-            Msg2MudProtocol::Prompt(text) => {
-                let _ = self.conn.send(TelnetEvent::Data(Bytes::from(text))).await;
+        }
+    }
+
+    async fn process_protocol_message_data(&mut self, d: MudData) {
+
+        match d.cmd.as_str() {
+            "text" => {
+                // d.args is a Vec<JsonValue> and ideally each JsonValue is a string.
+                // Just send them all as-is. It's up to the game server to handle line splits.
+                for jv in d.args {
+                    if let JsonValue::String(s) = jv {
+                        let _ = self.conn.send(TelnetEvent::Data(Bytes::from(ensure_crlf(&s)))).await;
+                    }
+                }
             },
-            Msg2MudProtocol::GMCP(cmd, data) => {
-                //let _ = self.conn.send(TelnetEvent::GMCP(cmd, data)).await;
+            "prompt" => {
+                // Prompts are similar to text but end in IAC GA or something to that effect. TODO.
+            }
+            "mssp" => {
+                // This will handle MSSP (Mud Server Status Protocol) data. For this, we need to
+                // extract the key-values from d.kwargs (which must be strings), format them as
+                // a sequence of <key> <value>, join them with newlines, and send them as a
+                // subnegotiation packet IAC SB <MSSP> <lines> IAC SE.
+                let mut mssp_data = Vec::new();
+                for (k, v) in d.kwargs {
+                    mssp_data.push(format!("{} {}", k, v));
+                }
+                let mssp_data = mssp_data.join("\r\n");
+                let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MSSP, Bytes::from(mssp_data))).await;
             },
-            Msg2MudProtocol::ServerStatus(data) => {
-                //let _ = self.conn.send(TelnetEvent::MSSP(data)).await;
-            },
+            _ => {
+                // Anything that isn't text, a prompt, or MSSP, is going to be sent as GMCP.
+                // GMCP data is sent via IAC SB <GMCP> <cmd>[ <json>] IAC SE. the json data part is
+                // optional and must be separated from the string <cmd> by a space if present.
+                // Since our MudData struct only has args and kwargs, the json data will be sent
+                // as a list of args and kwargs. So for example, the client might see:
+                // IAC SB GMCP room.data [[], {"name": "The Hall of Limbo", "id": 50}] IAC SE
+                // In this case cmd is room.data, and args was an empty vec, but kwargs had an object.
+                // The empty data structures must always be sent as [] and {} respectively.
+                // For our implementation, the client will ALWAYS be receiving the json even if it's
+                // empty, for consistency's sake.
+                let mut gmcp_data = Vec::new();
+                gmcp_data.push(d.cmd);
+                let mut gmcp_json = Vec::new();
+                // For our process, let's convert args and kwargs to json and send them as a string.
+
+                gmcp_json.push(JsonValue::Array(d.args));
+                gmcp_json.push(JsonValue::Object(d.kwargs.into_iter().map(|(k, v)| (k, v)).collect()));
+                let json_data = JsonValue::Array(gmcp_json);
+
+                gmcp_data.push(json_data.to_string());
+
+                let gmcp_out = gmcp_data.join(" ");
+                let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::GMCP, Bytes::from(gmcp_out))).await;
+            }
         }
     }
 
@@ -520,20 +574,30 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                         let mut parts = s.splitn(2, " ");
                         if let Some(cmd) = parts.next() {
                             if let Some(data) = parts.next() {
-                                let m = Msg2PortalFromClient::GMCP(cmd.to_string(), Some(JsonValue::from(data)));
+
+                                let d = MudData {
+                                    cmd: cmd.to_string(),
+                                    args: vec![JsonValue::from(data)],
+                                    kwargs: HashMap::new()
+                                };
+                                let m = Msg2PortalFromClient::Data(vec![d]);
                                 let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id, m)).await;
                             }
                         }
                     }
                     else {
-                        let m = Msg2PortalFromClient::GMCP(s, None);
+                        let d = MudData {
+                            cmd: s,
+                            args: vec![],
+                            kwargs: HashMap::new()
+                        };
+                        let m = Msg2PortalFromClient::Data(vec![d]);
                         let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id, m)).await;
                     }
                 }
             },
             _ => {}
         }
-
     }
 
     async fn request_ttype(&mut self) {

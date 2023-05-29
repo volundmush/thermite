@@ -1,28 +1,23 @@
 use std::collections::HashMap;
 use crate::protocols::link::protocol::LinkStub;
-use crate::protocols::{ProtocolCapabilities, ProtocolLink};
+use crate::protocols::{ProtocolCapabilities, ProtocolLink, MudData};
 use serde_json::Value as JsonValue;
 
 #[derive(Debug)]
 pub enum Msg2MudProtocol {
     Disconnect,
-    Prompt(String),
-    Text(String),
-    GMCP(String, Option<JsonValue>),
-    // When a game requests a Mud Server Status Protocol message,
-    ServerStatus(Vec<(String, String)>)
+    Data(Vec<MudData>)
 }
 
 #[derive(Debug)]
 pub enum Msg2PortalFromClient {
     Capabilities(ProtocolCapabilities),
-    Line(String),
-    GMCP(String, Option<JsonValue>),
+    Data(Vec<MudData>)
 }
 
 #[derive(Debug)]
 pub enum Msg2PortalFromLink {
-    ClientMessage(usize, Msg2MudProtocol),
+    ClientMessage(usize, Vec<MudData>),
     ClientDisconnected(usize)
 }
 
@@ -44,7 +39,6 @@ pub enum Msg2Link {
     ClientReady(ProtocolLink),
     ClientDisconnected(usize, String),
     ClientCapabilities(usize, ProtocolCapabilities),
-    ClientLine(usize, String),
-    ClientGMCP(usize, String, Option<JsonValue>),
+    ClientData(usize, Vec<MudData>),
     ClientList(HashMap<usize, ProtocolLink>),
 }
