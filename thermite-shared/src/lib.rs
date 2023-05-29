@@ -1,39 +1,5 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::mpsc::Sender;
-use crate::msg::Msg2MudProtocol;
-
-use serde::{Serialize, Deserialize};
-
-pub mod link;
-pub mod telnet;
-// pub mod websocket;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProtocolData {
-    pub id: usize,
-    pub addr: SocketAddr,
-    pub capabilities: ProtocolCapabilities
-}
-
-// This is received by whatever handles connections once they are ready to join the game.
-#[derive(Debug, Clone)]
-pub struct ProtocolLink {
-    pub conn_id: usize,
-    pub addr: SocketAddr,
-    pub capabilities: ProtocolCapabilities,
-    pub tx_protocol: Sender<Msg2MudProtocol>
-}
-
-impl ProtocolLink {
-    pub fn make_data(&self) -> ProtocolData {
-        ProtocolData {
-            id: self.conn_id.clone(),
-            addr: self.addr.clone(),
-            capabilities: self.capabilities.clone()
-        }
-    }
-}
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Protocol {
@@ -114,4 +80,62 @@ impl Default for ProtocolCapabilities {
             mnes: false
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionLines {
+    pub kind: String,
+    pub id: usize,
+    pub lines: Vec<String>
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionLine {
+    pub kind: String,
+    pub id: usize,
+    pub line: String
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionText {
+    pub kind: String,
+    pub id: usize,
+    pub text: String
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionGMCP {
+    pub kind: String,
+    pub id: usize,
+    pub gmcp_cmd: String,
+    pub gmcp_data: Option<JsonValue>
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionMSSP {
+    pub kind: String,
+    pub id: usize,
+    pub mssp: Vec<(String, String)>
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionPrompt {
+    pub kind: String,
+    pub id: usize,
+    pub prompt: String
+}
+
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgSessionDisconnect {
+    pub kind: String,
+    pub id: usize,
+    pub reason: String
+}
+
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ServerMsgRequestCapabilities {
+    pub kind: String,
+    pub id: usize
 }

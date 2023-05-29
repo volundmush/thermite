@@ -28,14 +28,14 @@ use serde_json::Value as JsonValue;
 use once_cell::sync::Lazy;
 use tokio::task::yield_now;
 use tokio::time::timeout;
-
+use thermite_shared::{ProtocolCapabilities, Color};
 use crate::{
     protocols::{
         telnet::{
             codec::{TelnetCodec, TelnetEvent},
             codes as tc
         },
-        {ProtocolCapabilities, Color, ProtocolLink}
+        {ProtocolLink}
     },
     msg::{Msg2MudProtocol, Msg2Portal, Msg2PortalFromClient},
     util::ensure_crlf

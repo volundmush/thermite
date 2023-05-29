@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use thermite_shared::ProtocolCapabilities;
 use crate::protocols::link::protocol::LinkStub;
-use crate::protocols::{ProtocolCapabilities, ProtocolLink};
+use crate::protocols::{ProtocolLink};
 use serde_json::Value as JsonValue;
+
 
 #[derive(Debug)]
 pub enum Msg2MudProtocol {

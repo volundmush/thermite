@@ -13,83 +13,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use futures::{StreamExt, SinkExt};
-
+use thermite_shared::*;
 
 use tokio_tungstenite::WebSocketStream;
 use tungstenite::protocol::Message as WsMessage;
+
 use crate::msg::{Msg2Link, Msg2MudProtocol, Msg2Portal, Msg2PortalFromLink};
-use crate::protocols::{ProtocolCapabilities, ProtocolData};
+use crate::protocols::{ProtocolData};
 
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionLines {
-    pub kind: String,
-    pub id: usize,
-    pub lines: Vec<String>
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionLine {
-    pub kind: String,
-    pub id: usize,
-    pub line: String
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionText {
-    pub kind: String,
-    pub id: usize,
-    pub text: String
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionGMCP {
-    pub kind: String,
-    pub id: usize,
-    pub gmcp_cmd: String,
-    pub gmcp_data: Option<JsonValue>
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionMSSP {
-    pub kind: String,
-    pub id: usize,
-    pub mssp: Vec<(String, String)>
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionPrompt {
-    pub kind: String,
-    pub id: usize,
-    pub prompt: String
-}
-
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionDisconnect {
-    pub kind: String,
-    pub id: usize,
-    pub reason: String
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgSessionJson {
-    pub kind: String,
-    pub id: usize,
-    pub data: JsonValue
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgRequestCapabilities {
-    pub kind: String,
-    pub id: usize
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ServerMsgJson {
-    pub kind: String,
-    pub data: JsonValue
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PortalMsgReady {
@@ -136,19 +67,6 @@ pub struct PortalMsgClientData {
 pub struct PortalMsgMSSPRequest {
     pub kind: String,
     pub id: usize,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PortalMsgJson {
-    pub kind: String,
-    pub data: JsonValue
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PortalMsgClientJson {
-    pub kind: String,
-    pub id: usize,
-    pub data: JsonValue
 }
 
 

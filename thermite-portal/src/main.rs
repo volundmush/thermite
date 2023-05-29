@@ -16,14 +16,14 @@ use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
 use tokio_rustls::rustls::server::NoClientAuth;
 use tokio_rustls::TlsAcceptor;
 
-use thermite::{
+use thermite_portal::{
     networking::{
         link::LinkAcceptor,
         telnet::TelnetAcceptor
     }
 };
-use thermite::msg::Msg2Portal;
-use thermite::portal::Portal;
+use thermite_portal::msg::Msg2Portal;
+use thermite_portal::portal::Portal;
 
 #[derive(Parser, Debug)]
 #[clap(version = "0.1", author = "Andrew Bastien <volundmush@gmail.com>", about = "A networking portal for MUDs.")]
