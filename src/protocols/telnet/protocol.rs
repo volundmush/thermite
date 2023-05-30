@@ -139,7 +139,7 @@ pub struct TelnetProtocol<T> {
 
 
 impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin + Sync {
-    pub fn new(conn_id: usize, conn: Framed<T, TelnetCodec>, addr: SocketAddr, tls: bool, tx_portal: Sender<Msg2Portal>) -> Self {
+    pub fn new(conn_id: usize, conn: Framed<T, TelnetCodec>, addr: SocketAddr, hostnames: Vec<String>, tls: bool, tx_portal: Sender<Msg2Portal>) -> Self {
 
         let (tx_protocol, rx_protocol) = channel(10);
         // It reaches here! a println!() works.
@@ -165,6 +165,9 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         };
         // Stack overflow before reaching this point.
         out.config.tls = tls;
+        out.config.host_address = addr.ip().to_string();
+        out.config.host_port = addr.port();
+        out.config.host_names = hostnames;
         out
     }
 

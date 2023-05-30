@@ -199,6 +199,10 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
 
     async fn process_ws_message(&mut self, msg: WsMessage) {
         match msg {
+            WsMessage::Binary(b) => {
+                // Not sure what to do with this yet.
+                println!("Got binary message: {:?}", b);
+            },
             WsMessage::Text(s) => {
                 if let Ok(j) = JsonValue::from_str(&s) {
                     let _ = self.process_json_message(j).await;
@@ -216,6 +220,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
     }
 
     async fn process_json_message(&mut self, msg: JsonValue) {
+        print!("Got json message: {}", JsonValue::to_string(&msg));
         let t = &msg["kind"];
         if let Some(s) = t.as_str() {
             match s {

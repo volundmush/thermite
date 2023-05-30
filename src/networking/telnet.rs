@@ -26,7 +26,8 @@ use tokio_rustls::rustls::{
     server::NoClientAuth
 };
 
-
+use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::lookup_ip::LookupIp;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt};
 use tokio::time::timeout;
@@ -75,7 +76,8 @@ impl TelnetAcceptor {
 pub struct TelnetHandler {
     addr: SocketAddr,
     tls_option: Option<Arc<TlsAcceptor>>,
-    tx_portal: Sender<Msg2Portal>
+    tx_portal: Sender<Msg2Portal>,
+    hostnames: Vec<String>
 }
 
 impl TelnetHandler {
@@ -84,11 +86,17 @@ impl TelnetHandler {
         Self {
             addr,
             tls_option,
-            tx_portal
+            tx_portal,
+            hostnames: Vec::new()
         }
     }
 
     pub async fn run(&mut self, stream: TcpStream) -> Result<(), Box<dyn Error>> {
+        let resolver = TokioAsyncResolver::tokio_from_system_conf()?;
+
+        let response = resolver.reverse_lookup(self.addr.ip()).await?;
+        self.hostnames = response.iter().map(|x| x.to_string()).collect();
+
         if let Some(tls_acceptor) = &self.tls_option {
             let hello_status = match timeout(Duration::from_millis(50), async {
                 let mut buffer = vec![0; 5];
@@ -139,7 +147,7 @@ impl TelnetHandler {
         let conn_id = CONNECTION_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         let telnet_codec = Framed::new(socket, TelnetCodec::new(8192));
 
-        let mut tel_prot = TelnetProtocol::new(conn_id, telnet_codec, self.addr.clone(), tls_engaged, self.tx_portal.clone());
+        let mut tel_prot = TelnetProtocol::new(conn_id, telnet_codec, self.addr.clone(), self.hostnames.clone(), tls_engaged, self.tx_portal.clone());
 
         tel_prot.run().await;
 
