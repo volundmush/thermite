@@ -30,6 +30,7 @@ pub enum Msg2Portal {
     LinkConnected(LinkStub),
     LinkDisconnected(usize, String),
     FromLink(usize, Msg2PortalFromLink),
+    Broadcast(String)
 }
 
 #[derive(Debug)]

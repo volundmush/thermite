@@ -67,6 +67,12 @@ pub struct PortalMsgMudData {
     pub data: Vec<MudData>
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PortalMsgBroadcast {
+    pub kind: String,
+    pub data: String
+}
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PortalMsgClientData {
@@ -220,7 +226,6 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
     }
 
     async fn process_json_message(&mut self, msg: JsonValue) {
-        print!("Got json message: {}", JsonValue::to_string(&msg));
         let t = &msg["kind"];
         if let Some(s) = t.as_str() {
             match s {
@@ -229,6 +234,11 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                         let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientMessage(p.id.clone(), p.data))).await;
                     }
                 },
+                "broadcast" => {
+                    if let Ok(p) = serde_json::from_value::<PortalMsgBroadcast>(msg.clone()) {
+                        let _ = self.tx_portal.send(Msg2Portal::Broadcast(p.data)).await;
+                    }
+                }
                 _ => {
                 }
             }

@@ -152,6 +152,9 @@ impl Portal {
             },
             Msg2Portal::Kill => {
 
+            },
+            Msg2Portal::Broadcast(msg) => {
+                let _ = self.message_all_clients(&msg).await;
             }
         }
     }
