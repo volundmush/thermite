@@ -293,7 +293,7 @@ $(document).ready(function() {
     // set an idle timer to send idle every 3 minutes,
     // to avoid proxy servers timing out on us
     setInterval( function() { // Connect to server
-            Evennia.msg("text", ["idle"], {});
+            Evennia.msg("idle", ["idle"], {});
         },
         60000*3
     );

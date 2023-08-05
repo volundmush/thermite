@@ -1,17 +1,26 @@
 use warp::{Filter, Reply};
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
-use trust_dns_resolver::TokioAsyncResolver;
-use warp::filters::BoxedFilter;
+use once_cell::sync::Lazy;
+
 use crate::{
-    protocols::websocket::protocol::WebsocketProtocol
-};
-use warp::{serve, Server, TlsServer};
-use crate::{
+    protocols::websocket::protocol::WebsocketProtocol,
     networking::CONNECTION_ID_COUNTER,
     IS_TLS_ENABLED,
     util::resolve_hostname
 };
+
+static TERA: Lazy<tera::Tera> = Lazy::new(|| {
+    let mut tera = match tera::Tera::new("webroot/**/*.html") {
+        Ok(t) => t,
+        Err(e) => {
+            println!("Parsing error(s): {}", e);
+            ::std::process::exit(1);
+        }
+    };
+
+    tera
+});
 
 async fn handle_websocket(ws: warp::ws::WebSocket, addr: Option<SocketAddr>) {
     // Create the actor with the WebSocket
@@ -34,7 +43,6 @@ async fn handle_websocket(ws: warp::ws::WebSocket, addr: Option<SocketAddr>) {
 
 }
 
-
 pub async fn run_warp(addr: SocketAddr, pem: Option<String>, key: Option<String>) {
     // WebSocket route
     let ws_route = warp::path("ws")
@@ -45,13 +53,34 @@ pub async fn run_warp(addr: SocketAddr, pem: Option<String>, key: Option<String>
             ws.on_upgrade(move |websocket | handle_websocket(websocket, remote_addr))
         });
 
-    // Other HTTP routes...
-    let http_routes = warp::any()
-        .map(|| "Hello, HTTP!");
+    let http_static = warp::path("static")
+        .and(warp::fs::dir("webroot/static"));
 
+    let wclient = warp::path::end().map(|| {
+        let mut context = tera::Context::new();
+        context.insert("game_name", "Thermite Webclient");
+        context.insert("websocket_enabled", "true");
+        context.insert("websocket_port", "8000");
+        let response: Box<dyn warp::Reply> = match TERA.render("webclient/webclient.html", &context) {
+            Ok(rendered) => Box::new(warp::reply::html(rendered)),
+            Err(err) => {
+                eprintln!("Template rendering error: {}", err);
+                Box::new(warp::reply::with_status(
+                    "Internal server error",
+                    warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                ))
+            }
+        };
+        response
+    });
+
+    let log = warp::log("example::api");
 
     // Combine routes
-    let routes = ws_route.or(http_routes);
+    let routes = ws_route
+        .or(http_static)
+        .or(wclient)
+        .with(log);
 
     let mut warp = warp::serve(routes);
 
