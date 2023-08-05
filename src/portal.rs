@@ -112,7 +112,7 @@ impl Portal {
                             let _ = client.tx_protocol.send(Msg2MudProtocol::Data(m2)).await;
                         }
                     }
-                    Msg2PortalFromLink::ClientDisconnected(client_id) => {
+                    Msg2PortalFromLink::ClientDisconnected(client_id, reason) => {
                         if let Some(client) = self.clients.remove(&client_id) {
                             let _ = client.tx_protocol.send(Msg2MudProtocol::Disconnect).await;
                         }

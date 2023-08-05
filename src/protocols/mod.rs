@@ -9,7 +9,7 @@ use serde_json::Value as JsonValue;
 
 pub mod link;
 pub mod telnet;
-// pub mod websocket;
+pub mod websocket;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MudData {
@@ -21,7 +21,6 @@ pub struct MudData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolData {
     pub id: usize,
-    pub addr: SocketAddr,
     pub capabilities: ProtocolCapabilities
 }
 
@@ -29,7 +28,6 @@ pub struct ProtocolData {
 #[derive(Debug, Clone)]
 pub struct ProtocolLink {
     pub conn_id: usize,
-    pub addr: SocketAddr,
     pub capabilities: ProtocolCapabilities,
     pub tx_protocol: Sender<Msg2MudProtocol>
 }
@@ -38,7 +36,6 @@ impl ProtocolLink {
     pub fn make_data(&self) -> ProtocolData {
         ProtocolData {
             id: self.conn_id.clone(),
-            addr: self.addr.clone(),
             capabilities: self.capabilities.clone()
         }
     }

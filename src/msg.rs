@@ -18,7 +18,7 @@ pub enum Msg2PortalFromClient {
 #[derive(Debug)]
 pub enum Msg2PortalFromLink {
     ClientMessage(usize, Vec<MudData>),
-    ClientDisconnected(usize)
+    ClientDisconnected(usize, String)
 }
 
 #[derive(Debug)]

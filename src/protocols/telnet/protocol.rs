@@ -3,7 +3,6 @@ use std::{
     vec::Vec,
     net::SocketAddr,
     time::{Duration, Instant},
-    sync::Arc
 };
 
 use tokio::{
@@ -26,8 +25,6 @@ use futures::{
 use serde_json::Value as JsonValue;
 
 use once_cell::sync::Lazy;
-use tokio::task::yield_now;
-use tokio::time::timeout;
 
 use crate::{
     protocols::{
@@ -119,7 +116,6 @@ pub struct TelnetProtocol<T> {
     // nitty-gritty so the Session doesn't need to deal with it.
     conn_id: usize,
     op_state: HashMap<u8, TelnetOptionState>,
-    addr: SocketAddr,
     config: ProtocolCapabilities,
     handshakes_left: TelnetHandshakes,
     ttype_count: u8,
@@ -145,7 +141,6 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         // It reaches here! a println!() works.
         let mut out = Self {
             conn_id,
-            addr,
             op_state: Default::default(),
             conn,
             config: Default::default(),
@@ -174,7 +169,6 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     fn make_link(&self) -> ProtocolLink {
         ProtocolLink {
             conn_id: self.conn_id,
-            addr: self.addr.clone(),
             capabilities: self.config.clone(),
             tx_protocol: self.tx_protocol.clone()
         }
@@ -290,28 +284,41 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     }
 
     async fn process_app_buffer(&mut self) {
-        while let Some(ipos) = self.app_buffer.as_ref().iter().position(|b| b == &tc::LF) {
-            let cmd = self.app_buffer.split_to(ipos);
-            if let Ok(s) = String::from_utf8(cmd.to_vec()) {
-                let _ = self.handle_user_command(s.trim().to_string()).await;
+        loop {
+            // Find the position of the LF character
+            if let Some(ipos) = self.app_buffer.as_ref().iter().position(|b| b == &b'\n') {
+
+                // Extract the line without CR and LF characters
+                let cmd = self.app_buffer.split_to(ipos);
+
+
+                // Convert the line to a String and handle the command
+                if let Ok(s) = String::from_utf8(cmd.to_vec()) {
+                    // strip all \r from the string
+                    let s = s.replace("\r", "");
+                    let _ = self.handle_user_command(s).await;
+                }
+
+                // Advance the buffer to consume LF character
+                self.app_buffer.advance(1);
+            } else {
+                // No more complete lines in the buffer, break the loop
+                break;
             }
-            self.app_buffer.advance(1);
         }
     }
 
     async fn handle_user_command(&mut self, cmd: String) {
-        if cmd.len() > 0 {
-            if cmd.starts_with("//") {
-                let _ = self.handle_protocol_command(cmd);
-            } else if self.sent_link {
-                // We must format the command as a Msg2PortalFromClient::Data, so we must encapsulate this in a MudData.
-                let d = MudData {
-                    cmd: String::from("text"),
-                    args: vec![JsonValue::String(cmd)],
-                    kwargs: Default::default(),
-                };
-                let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id, Msg2PortalFromClient::Data(vec![d]))).await;
-            }
+        if cmd.starts_with("//") {
+            let _ = self.handle_protocol_command(cmd);
+        } else if self.sent_link {
+            // We must format the command as a Msg2PortalFromClient::Data, so we must encapsulate this in a MudData.
+            let d = MudData {
+                cmd: String::from("text"),
+                args: vec![JsonValue::String(cmd)],
+                kwargs: Default::default(),
+            };
+            let _ = self.tx_portal.send(Msg2Portal::FromClient(self.conn_id, Msg2PortalFromClient::Data(vec![d]))).await;
         }
     }
 

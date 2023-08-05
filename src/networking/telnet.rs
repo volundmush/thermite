@@ -1,33 +1,20 @@
 use std::{
     error::Error,
-    net::{IpAddr, SocketAddr},
-    path::{PathBuf},
+    net::{SocketAddr},
     sync::{Arc},
-    sync::atomic::{AtomicUsize, Ordering},
-    fs::File,
-    io::BufReader
-};
-use std::io::Read;
+    sync::atomic::{Ordering},
 
+};
 
 use std::time::Duration;
 
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc::Sender,
-    io::{BufStream, AsyncBufRead, AsyncBufReadExt}
 };
 
-use tokio_rustls::rustls;
-use tokio_rustls::{TlsStream, TlsAcceptor};
-
-use tokio_rustls::rustls::{
-    Certificate, PrivateKey, ServerConfig,
-    server::NoClientAuth
-};
-
+use tokio_rustls::{TlsAcceptor};
 use trust_dns_resolver::TokioAsyncResolver;
-use trust_dns_resolver::lookup_ip::LookupIp;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt};
 use tokio::time::timeout;
@@ -37,7 +24,7 @@ use crate::protocols::telnet::codec::TelnetCodec;
 use crate::protocols::telnet::protocol::TelnetProtocol;
 use crate::networking::CONNECTION_ID_COUNTER;
 
-use crate::util::{ClientHelloStatus, check_tls_client_hello, check_http_request, HttpRequestStatus, generate_id};
+use crate::util::{ClientHelloStatus, check_tls_client_hello};
 
 pub struct TelnetAcceptor {
     listener: TcpListener,
@@ -100,11 +87,11 @@ impl TelnetHandler {
         if let Some(tls_acceptor) = &self.tls_option {
             let hello_status = match timeout(Duration::from_millis(50), async {
                 let mut buffer = vec![0; 5];
-
                 loop {
                     stream.peek(&mut buffer).await.unwrap();
 
                     let status = check_tls_client_hello(&buffer);
+
                     match status {
                         ClientHelloStatus::Complete | ClientHelloStatus::Invalid => {
                             break status;
@@ -117,7 +104,9 @@ impl TelnetHandler {
                 }
             }).await {
                 Ok(status) => status,
-                Err(_) => ClientHelloStatus::Invalid
+                Err(_) => {
+                    ClientHelloStatus::Invalid
+                }
             };
 
             match hello_status {

@@ -175,7 +175,6 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                 }
             },
             Msg2Link::ClientCapabilities(id, cap) => {
-                println!("Link received client cap");
                 let out = PortalMsgClientCapabilities {
                     kind: String::from("client_capabilities"),
                     id,
@@ -219,6 +218,9 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                 let _ = self.conn.close(None).await;
                 let _ = self.tx_portal.send(Msg2Portal::LinkDisconnected(self.conn_id, String::from("dunno"))).await;
             }
+            WsMessage::Ping(v) => {
+                let _ = self.conn.send(WsMessage::Pong(v)).await;
+            },
             _ => {
 
             }
@@ -229,6 +231,11 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
         let t = &msg["kind"];
         if let Some(s) = t.as_str() {
             match s {
+                "client_disconnected" => {
+                    if let Ok(p) = serde_json::from_value::<PortalMsgDisconnected>(msg.clone()) {
+                        let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientDisconnected(p.id.clone(), p.reason))).await;
+                    }
+                }
                 "client_data" => {
                     if let Ok(p) = serde_json::from_value::<PortalMsgMudData>(msg.clone()) {
                         let _ = self.tx_portal.send(Msg2Portal::FromLink(self.conn_id, Msg2PortalFromLink::ClientMessage(p.id.clone(), p.data))).await;
