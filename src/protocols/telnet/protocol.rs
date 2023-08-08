@@ -682,8 +682,12 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         // version might also be in here as a second word.
         if data.contains(" ") {
             let results: Vec<&str> = data.splitn(2, " ").collect();
-            self.config.client_name = String::from(results[0]);
-            self.config.client_version = String::from(results[1]);
+            if results.len() > 0 {
+                self.config.client_name = String::from(results[0]);
+            }
+            if results.len() > 1 {
+                self.config.client_version = String::from(results[1]);
+            }
         } else {
             self.config.client_name = data;
         }
