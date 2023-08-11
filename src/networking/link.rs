@@ -61,7 +61,12 @@ impl LinkAcceptor {
                 Ok((stream, addr)) => {
                     let mut handler = LinkHandler::new(addr, self.tx_portal.clone());
                     tokio::spawn(async move {
-                        handler.run(stream).await;
+                        match handler.run(stream).await {
+                            Ok(()) => {},
+                            Err(e) => {
+                                println!("Error accepting link connection: {}", e);
+                            }
+                        }
                     });
                 }
                 Err(e) => {

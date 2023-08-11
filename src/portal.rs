@@ -123,6 +123,7 @@ impl Portal {
                 if let Some(link) = self.link.as_mut() {
                     let _ = link.tx_link.send(Msg2Link::ClientDisconnected(conn_id, reason)).await;
                 }
+                let _ = self.clients.remove(&conn_id);
             },
             Msg2Portal::ClientConnected(stub) => {
                 self.clients.insert(stub.conn_id, stub.clone());

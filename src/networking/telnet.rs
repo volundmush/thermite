@@ -49,7 +49,12 @@ impl TelnetAcceptor {
                 Ok((stream, addr)) => {
                     let mut handler = TelnetHandler::new(addr, self.tls_acceptor.clone(), self.tx_portal.clone());
                     tokio::spawn(async move {
-                        handler.run(stream).await;
+                        match handler.run(stream).await {
+                            Ok(()) => {},
+                            Err(e) => {
+                                println!("Error accepting Telnet Connection: {}", e);
+                            }
+                        }
                     });
                 }
                 Err(e) => {
@@ -81,8 +86,9 @@ impl TelnetHandler {
     pub async fn run(&mut self, stream: TcpStream) -> Result<(), Box<dyn Error>> {
         let resolver = TokioAsyncResolver::tokio_from_system_conf()?;
 
-        let response = resolver.reverse_lookup(self.addr.ip()).await?;
-        self.hostnames = response.iter().map(|x| x.to_string()).collect();
+        if let Ok(response) = resolver.reverse_lookup(self.addr.ip()).await {
+            self.hostnames = response.iter().map(|x| x.to_string()).collect();
+        }
 
         if let Some(tls_acceptor) = &self.tls_option {
             let hello_status = match timeout(Duration::from_millis(50), async {

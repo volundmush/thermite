@@ -142,6 +142,8 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
     }
 
     async fn process_link_message(&mut self, msg: Msg2Link) {
+        let mut wsm: Option<String> = None;
+
         match msg {
             Msg2Link::Kill => self.running = false,
             Msg2Link::Replaced => self.running = false,
@@ -151,7 +153,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     protocol: prot.make_data()
                 };
                 if let Ok(j) = serde_json::to_string(&out) {
-                    let _ = self.conn.send(WsMessage::Text(j)).await;
+                    wsm = Some(j);
                 }
             },
             Msg2Link::ClientData(id, data) => {
@@ -161,7 +163,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     data
                 };
                 if let Ok(j) = serde_json::to_string(&out) {
-                    let _ = self.conn.send(WsMessage::Text(j)).await;
+                    wsm = Some(j);
                 }
             },
             Msg2Link::ClientDisconnected(id, reason) => {
@@ -171,7 +173,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     reason
                 };
                 if let Ok(j) = serde_json::to_string(&out) {
-                    let _ = self.conn.send(WsMessage::Text(j)).await;
+                    wsm = Some(j);
                 }
             },
             Msg2Link::ClientCapabilities(id, cap) => {
@@ -181,9 +183,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     capabilities: cap
                 };
                 if let Ok(j) = serde_json::to_string(&out) {
-                    let _ = self.conn.send(WsMessage::Text(j)).await;
-                } else {
-                    println!("Was there a serialize error?");
+                    wsm = Some(j);
                 }
             },
             Msg2Link::ClientList(data) => {
@@ -196,10 +196,16 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
                     data: out_data
                 };
                 if let Ok(j) = serde_json::to_string(&out) {
-                    let _ = self.conn.send(WsMessage::Text(j)).await;
+                    wsm = Some(j);
                 }
-            },
+            }
+        };
+
+        if let Some(w) = wsm {
+            println!("To Game: {:?}", w);
+            let _ = self.conn.send(WsMessage::Text(w)).await;
         }
+
     }
 
     async fn process_ws_message(&mut self, msg: WsMessage) {

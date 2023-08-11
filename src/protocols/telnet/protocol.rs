@@ -215,7 +215,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         let mut interval_timer = IntervalStream::new(time::interval(Duration::from_millis(100)));
 
         let mut in_negotiation_phase = true;
-        let negotiation_deadline = time::Instant::now() + Duration::from_millis(100);
+        let negotiation_deadline = time::Instant::now() + Duration::from_millis(500);
 
         // The main loop which operates the protocol during and after negotiation.
         while self.running {
