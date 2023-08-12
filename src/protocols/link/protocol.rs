@@ -202,7 +202,7 @@ impl<T> LinkProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unpin
         };
 
         if let Some(w) = wsm {
-            println!("To Game: {:?}", w);
+            //println!("To Game: {:?}", w);
             let _ = self.conn.send(WsMessage::Text(w)).await;
         }
 
