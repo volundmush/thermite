@@ -192,6 +192,17 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         }
     }
 
+    async fn send(&mut self, te: TelnetEvent) -> bool {
+        match self.conn.send(te).await {
+            Ok(_) => true,
+            Err(e) => {
+                self.running = false;
+                let _ = self.tx_portal.send(Msg2Portal::ClientDisconnected(self.conn_id, String::from(e.to_string()))).await;
+                false
+            }
+        }
+    }
+
     pub async fn run(&mut self) {
 
         // Initialize Telnet Op handlers.
@@ -200,12 +211,12 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             let mut state = TelnetOptionState::default();
             if(tel_op.start_local) {
                 state.local.negotiating = true;
-                let _ = self.conn.send(TelnetEvent::Negotiate(tc::WILL, *code)).await;
+                self.send(TelnetEvent::Negotiate(tc::WILL, *code)).await;
                 self.handshakes_left.local.insert(*code);
             }
             if(tel_op.start_remote) {
                 state.remote.negotiating = true;
-                let _ = self.conn.send(TelnetEvent::Negotiate(tc::DO, *code)).await;
+                self.send(TelnetEvent::Negotiate(tc::DO, *code)).await;
                 self.handshakes_left.remote.insert(*code);
             }
             self.op_state.insert(*code, state);
@@ -340,6 +351,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     }
 
     async fn process_protocol_message_data(&mut self, d: MudData) {
+        let mut to_send: Vec<TelnetEvent>  = Vec::new();
 
         match d.cmd.as_str() {
             "text" => {
@@ -347,7 +359,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                 // Just send them all as-is. It's up to the game server to handle line splits.
                 for jv in d.args {
                     if let JsonValue::String(s) = jv {
-                        let _ = self.conn.send(TelnetEvent::Data(Bytes::from(ensure_crlf(&s)))).await;
+                        to_send.push(TelnetEvent::Data(Bytes::from(ensure_crlf(&s))));
                     }
                 }
             },
@@ -364,7 +376,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                     mssp_data.push(format!("{} {}", k, v));
                 }
                 let mssp_data = mssp_data.join("\r\n");
-                let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MSSP, Bytes::from(mssp_data))).await;
+                to_send.push(TelnetEvent::SubNegotiate(tc::MSSP, Bytes::from(mssp_data)));
             },
             _ => {
                 // Anything that isn't text, a prompt, or MSSP, is going to be sent as GMCP.
@@ -389,9 +401,16 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
                 gmcp_data.push(json_data.to_string());
 
                 let gmcp_out = gmcp_data.join(" ");
-                let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::GMCP, Bytes::from(gmcp_out))).await;
+                to_send.push(TelnetEvent::SubNegotiate(tc::GMCP, Bytes::from(gmcp_out)));
             }
         }
+
+        for te in to_send {
+            if !self.send(te).await {
+                break;
+            }
+        }
+
     }
 
     async fn receive_negotiate(&mut self, command: u8, op: u8) {
@@ -481,7 +500,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
         }
         
         if respond > 0 {
-            let _ = self.conn.send(TelnetEvent::Negotiate(respond, op)).await;
+            let _ = self.send(TelnetEvent::Negotiate(respond, op)).await;
         }
         if handshake_local > 0 {
             self.handshakes_left.local.remove(&handshake_local);
@@ -542,7 +561,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
             },
             tc::MCCP2 => {
                 self.config.mccp2 = true;
-                let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MCCP2, Bytes::new())).await;
+                self.send(TelnetEvent::SubNegotiate(tc::MCCP2, Bytes::new())).await;
             },
             tc::MCCP3 => {
                 self.config.mccp3 = true;
@@ -613,7 +632,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
     async fn request_ttype(&mut self) {
         let mut data = BytesMut::with_capacity(1);
         data.put_u8(1);
-        let _ = self.conn.send(TelnetEvent::SubNegotiate(tc::MTTS, data.freeze())).await;
+        self.send(TelnetEvent::SubNegotiate(tc::MTTS, data.freeze())).await;
     }
 
     async fn receive_ttype(&mut self, mut data: Bytes) {
