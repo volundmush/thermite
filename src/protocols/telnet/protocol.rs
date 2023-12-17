@@ -254,7 +254,7 @@ impl<T> TelnetProtocol<T> where T: AsyncRead + AsyncWrite + Send + 'static + Unp
 
             // If negotiations have just completed or timed out, send the ClientConnected message
             if !in_negotiation_phase && !self.sent_link {
-                self.tx_portal.send(Msg2Portal::ClientConnected(self.make_link())).await;
+                let _ = self.tx_portal.send(Msg2Portal::ClientConnected(self.make_link())).await;
                 self.sent_link = true;
                 self.active = true;
                 self.process_app_buffer().await;

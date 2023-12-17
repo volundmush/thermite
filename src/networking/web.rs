@@ -82,10 +82,10 @@ pub async fn run_warp(addr: SocketAddr, pem: Option<String>, key: Option<String>
         .or(wclient)
         .with(log);
 
-    let mut warp = warp::serve(routes);
+    let warp = warp::serve(routes);
 
     if *IS_TLS_ENABLED.lock().unwrap() {
-        let mut warptls = warp.tls()
+        let warptls = warp.tls()
             .key_path(key.unwrap())
             .cert_path(pem.unwrap());
         let _ = warptls.bind(addr).await;
