@@ -31,7 +31,7 @@ use thermite::portal::Portal;
 #[derive(Parser, Debug)]
 #[clap(version = "0.1", author = "Andrew Bastien <volundmush@gmail.com>", about = "A networking portal for MUDs.")]
 pub struct Args {
-    #[arg(short, long, value_name = "ip:port", default_value = "192.168.50.50:7000", help = "Sets the (internal) link IpAddr and u16 port for IPC")]
+    #[arg(short, long, value_name = "ip:port", default_value = "127.0.0.1:7000", help = "Sets the (internal) link IpAddr and u16 port for IPC")]
     pub link: SocketAddr,
 
     #[arg(short, long, value_name = "ip:port", default_value = "0.0.0.0:1280", help = "Sets the external Telnet IpAddr and u16 port")]
