@@ -1,8 +1,8 @@
 use std::{
     error::Error,
-    net::{SocketAddr},
-    sync::{Arc},
-    sync::atomic::{Ordering},
+    net::SocketAddr,
+    sync::Arc,
+    sync::atomic::Ordering,
 
 };
 
@@ -13,7 +13,6 @@ use tokio::{
     sync::mpsc::Sender,
 };
 
-use tokio_rustls::{TlsAcceptor};
 use trust_dns_resolver::TokioAsyncResolver;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt};
@@ -28,17 +27,15 @@ use crate::util::{ClientHelloStatus, check_tls_client_hello};
 
 pub struct TelnetAcceptor {
     listener: TcpListener,
-    tls_acceptor: Option<Arc<TlsAcceptor>>,
     tx_portal: Sender<Msg2Portal>
 }
 
 impl TelnetAcceptor {
-    pub async fn new(addr: SocketAddr, tls_acceptor: Option<Arc<TlsAcceptor>>, tx_portal: Sender<Msg2Portal>) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(addr: SocketAddr, tx_portal: Sender<Msg2Portal>) -> Result<Self, Box<dyn Error>> {
         let listener = TcpListener::bind(addr).await?;
 
         Ok(TelnetAcceptor {
             listener,
-            tls_acceptor,
             tx_portal
         })
     }
@@ -47,7 +44,7 @@ impl TelnetAcceptor {
         loop {
             match self.listener.accept().await {
                 Ok((stream, addr)) => {
-                    let mut handler = TelnetHandler::new(addr, self.tls_acceptor.clone(), self.tx_portal.clone());
+                    let mut handler = TelnetHandler::new(addr, self.tx_portal.clone());
                     tokio::spawn(async move {
                         match handler.run(stream).await {
                             Ok(()) => {},
@@ -67,17 +64,15 @@ impl TelnetAcceptor {
 
 pub struct TelnetHandler {
     addr: SocketAddr,
-    tls_option: Option<Arc<TlsAcceptor>>,
     tx_portal: Sender<Msg2Portal>,
     hostnames: Vec<String>
 }
 
 impl TelnetHandler {
 
-    pub fn new(addr: SocketAddr, tls_option: Option<Arc<TlsAcceptor>>, tx_portal: Sender<Msg2Portal>) -> Self {
+    pub fn new(addr: SocketAddr, tx_portal: Sender<Msg2Portal>) -> Self {
         Self {
             addr,
-            tls_option,
             tx_portal,
             hostnames: Vec::new()
         }
@@ -90,47 +85,7 @@ impl TelnetHandler {
             self.hostnames = response.iter().map(|x| x.to_string()).collect();
         }
 
-        if let Some(tls_acceptor) = &self.tls_option {
-            let hello_status = match timeout(Duration::from_millis(50), async {
-                let mut buffer = vec![0; 5];
-                loop {
-                    stream.peek(&mut buffer).await.unwrap();
-
-                    let status = check_tls_client_hello(&buffer);
-
-                    match status {
-                        ClientHelloStatus::Complete | ClientHelloStatus::Invalid => {
-                            break status;
-                        }
-                        ClientHelloStatus::Partial => {
-                            // Yield the current task to prevent a busy loop
-                            tokio::task::yield_now().await;
-                        }
-                    }
-                }
-            }).await {
-                Ok(status) => status,
-                Err(_) => {
-                    ClientHelloStatus::Invalid
-                }
-            };
-
-            match hello_status {
-                ClientHelloStatus::Complete => {
-                    let tls_stream = tls_acceptor.as_ref().accept(stream).await?;
-
-                    self.handle_telnet_connection(tls_stream, true).await?;
-                }
-                _ => {
-                    // Invalid or timeout reached
-                    // Handle non-TLS or invalid connections
-                    self.handle_telnet_connection(stream, false).await?;
-                }
-            }
-        } else {
-            // No ServerConfig provided, handle the connection as a non-TLS connection
-            self.handle_telnet_connection(stream, false).await?;
-        }
+        self.handle_telnet_connection(stream, false).await?;
 
         Ok(())
     }
